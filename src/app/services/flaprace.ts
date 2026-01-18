@@ -1,5 +1,4 @@
 import { ethers } from 'ethers';
-import FlapRaceABI from '../../contracts/FlapRace.json';
 
 // Dirección del contrato (se debe actualizar después del deploy)
 const CONTRACT_ADDRESS = process.env.NEXT_PUBLIC_CONTRACT_ADDRESS || '';
