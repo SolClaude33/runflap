@@ -79,7 +79,7 @@ export default function RaceTrack({ raceState, countdown, onRaceEnd, raceId, rac
   const [winner, setWinner] = useState<Racer | null>(null);
   const [totalLength, setTotalLength] = useState<number>(0);
   const [racersReady, setRacersReady] = useState(false);
-  const [raceSeed, setRaceSeed] = useState<string>('');
+  const [displaySeed, setDisplaySeed] = useState<string>('');
   const [showTransparency, setShowTransparency] = useState(false);
   const [showConfetti, setShowConfetti] = useState(false);
   const [showCelebration, setShowCelebration] = useState(false);
@@ -178,7 +178,7 @@ export default function RaceTrack({ raceState, countdown, onRaceEnd, raceId, rac
       seedRef.current = seed;
       rngRef.current = createPRNG(seed);
       tickCounterRef.current = 0;
-      setRaceSeed(`${seed.toString(36).toUpperCase()}`);
+      setDisplaySeed(`${seed.toString(36).toUpperCase()}`);
       const resetRacers = createInitialRacers(seed);
       setRacers(resetRacers);
       racersRef.current = resetRacers;
@@ -868,7 +868,7 @@ export default function RaceTrack({ raceState, countdown, onRaceEnd, raceId, rac
           
           <div className="text-[10px] text-white/80 mb-2">
             <span className="text-[#7cb894]">Seed:</span>{' '}
-            <span className="font-mono break-all">{raceSeed || 'Waiting...'}</span>
+            <span className="font-mono break-all">{displaySeed || 'Waiting...'}</span>
           </div>
 
           <div className="text-[10px] text-white/80 mb-1">
