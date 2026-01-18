@@ -32,7 +32,7 @@ export default function HelpModal({ isOpen, onClose }: HelpModalProps) {
             <div>
               <h3 className="font-bold text-lg text-yellow-400">1. Connect Wallet</h3>
               <p className="text-green-200 text-sm">
-                Connect your Solana wallet (Phantom or Solflare) and set up your display name to start playing.
+                Connect your BNB wallet (MetaMask) and set up your display name to start playing.
               </p>
             </div>
           </div>

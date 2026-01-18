@@ -17,7 +17,7 @@ export default function AboutSection() {
           <div className="bg-black/60 backdrop-blur-sm rounded-2xl p-6 border-2 border-green-500">
             <h3 className="text-2xl font-bold text-green-400 mb-4">🎮 What is XPR?</h3>
             <p className="text-white leading-relaxed">
-              XMAS Pumpfun Race is a festive Solana-based multiplayer racing game. Connect your wallet, 
+              FlapRace is a thrilling BNB-based multiplayer racing game. Connect your wallet, 
               bet real SOL on your favorite characters, and watch thrilling 3-lap races with random outcomes!
             </p>
           </div>
@@ -92,7 +92,7 @@ export default function AboutSection() {
           <div className="bg-black/60 backdrop-blur-sm rounded-2xl p-5 border-2 border-green-500 text-center">
             <div className="text-4xl mb-2">🔒</div>
             <h4 className="text-green-400 font-bold mb-2">Secure</h4>
-            <p className="text-white/80 text-sm">Solana mainnet transactions, instant payouts to your wallet</p>
+            <p className="text-white/80 text-sm">BNB Smart Chain transactions, instant payouts to your wallet</p>
           </div>
           <div className="bg-black/60 backdrop-blur-sm rounded-2xl p-5 border-2 border-green-500 text-center">
             <div className="text-4xl mb-2">📱</div>

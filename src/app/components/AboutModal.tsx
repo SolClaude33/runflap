@@ -55,7 +55,7 @@ export default function AboutModal({ isOpen, onClose }: AboutModalProps) {
             <div className="bg-black/40 backdrop-blur-sm rounded-xl p-5 border border-green-500/50">
               <h3 className="text-xl font-bold text-green-400 mb-3">🎮 What is XPR?</h3>
               <p className="text-white/90 text-sm leading-relaxed">
-                XMAS Pumpfun Race is a festive Solana-based multiplayer racing game. Connect your wallet, 
+                FlapRace is a thrilling BNB-based multiplayer racing game. Connect your wallet, 
                 bet real SOL on your favorite characters, and watch thrilling 3-lap races with random outcomes!
               </p>
             </div>
@@ -130,7 +130,7 @@ export default function AboutModal({ isOpen, onClose }: AboutModalProps) {
             <div className="bg-black/40 backdrop-blur-sm rounded-xl p-4 border border-green-500/50 text-center">
               <div className="text-3xl mb-2">🔒</div>
               <h4 className="text-green-400 font-bold mb-1">Secure</h4>
-              <p className="text-white/70 text-xs">Solana mainnet transactions, instant payouts to your wallet</p>
+              <p className="text-white/70 text-xs">BNB Smart Chain transactions, instant payouts to your wallet</p>
             </div>
             <div className="bg-black/40 backdrop-blur-sm rounded-xl p-4 border border-green-500/50 text-center">
               <div className="text-3xl mb-2">📱</div>
