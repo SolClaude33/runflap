@@ -20,17 +20,12 @@ const API_KEY = process.env.API_KEY || '';
 
 export async function POST(request: NextRequest) {
   try {
-    // Verificar API key
-    const apiKey = request.headers.get('x-api-key');
-    if (!apiKey || apiKey !== API_KEY) {
-      return NextResponse.json(
-        { success: false, error: 'Unauthorized' },
-        { status: 401 }
-      );
-    }
-
     const body = await request.json();
     const { raceId, winner } = body;
+
+    // Verificar API key (opcional si viene, pero también permitimos sin ella si la carrera realmente terminó)
+    const apiKey = request.headers.get('x-api-key');
+    const hasValidApiKey = apiKey && apiKey === API_KEY;
 
     // Validar parámetros
     if (!raceId || !winner) {
@@ -71,7 +66,17 @@ export async function POST(request: NextRequest) {
     // Verificar que la carrera ha terminado
     const raceEndTime = Number(raceInfo.raceEndTime);
     const now = Math.floor(Date.now() / 1000);
-    if (now < raceEndTime) {
+    const raceHasEnded = now >= raceEndTime;
+    
+    // Si no tiene API key válida, solo permitir si la carrera realmente terminó
+    if (!hasValidApiKey && !raceHasEnded) {
+      return NextResponse.json(
+        { success: false, error: 'Unauthorized or race not finished yet' },
+        { status: 401 }
+      );
+    }
+
+    if (!raceHasEnded) {
       return NextResponse.json(
         { success: false, error: 'Race not finished yet' },
         { status: 400 }

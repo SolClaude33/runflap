@@ -56,7 +56,7 @@ export default function HelpModal({ isOpen, onClose }: HelpModalProps) {
             <div>
               <h3 className="font-bold text-lg text-yellow-400">3. Place Your Bet</h3>
               <p className="text-green-200 text-sm">
-                Choose your bet amount in SOL. You can use preset buttons (1, 2, 5, 10) or adjust manually. Enable "Automatic" mode to repeat your bet every race.
+                Choose your bet amount in BNB (0.01, 0.05, 0.1, or 0.5 BNB). Each wallet can only bet once per race.
               </p>
             </div>
           </div>

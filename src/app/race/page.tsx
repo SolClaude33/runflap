@@ -204,11 +204,37 @@ export default function RacePage() {
     setRaceState('finished');
     setLastWinner(winnerId);
     
+    // Finalizar la carrera en el contrato automáticamente
+    // El endpoint verifica que la carrera realmente terminó antes de permitir la finalización
+    if (!testMode && raceNumber > 0) {
+      try {
+        const response = await fetch('/api/race/finalize', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            raceId: raceNumber,
+            winner: winnerId,
+          }),
+        });
+
+        const result = await response.json();
+        if (result.success) {
+          console.log(`Race ${raceNumber} finalized. Winner: ${winnerId}. TX: ${result.txHash}`);
+        } else {
+          console.error('Error finalizing race:', result.error);
+        }
+      } catch (error) {
+        console.error('Failed to finalize race:', error);
+      }
+    }
+    
     // Recargar datos después de que termine la carrera
     setTimeout(() => {
       fetchRaceData();
     }, 2000);
-  }, [fetchRaceData]);
+  }, [fetchRaceData, raceNumber, testMode]);
 
   const handlePlaceBet = useCallback(async (carId: number, betAmount: string) => {
     if (testMode) {
