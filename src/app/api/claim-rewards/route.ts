@@ -1,8 +1,9 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { claimCreatorFees, getVaultStatus } from '@/lib/claim-rewards';
 
 export const dynamic = 'force-dynamic';
 
+// Endpoint simplificado para BNB
+// El sistema de recompensas ahora se maneja en el contrato
 export async function POST(request: NextRequest) {
   try {
     const authHeader = request.headers.get('authorization');
@@ -15,22 +16,11 @@ export async function POST(request: NextRequest) {
       }, { status: 401 });
     }
 
-    const { tokenMint } = await request.json();
-
-    if (!tokenMint) {
-      return NextResponse.json({ 
-        success: false, 
-        error: 'Token mint address required' 
-      }, { status: 400 });
-    }
-
-    const result = await claimCreatorFees(tokenMint);
-    
-    if (!result.success) {
-      return NextResponse.json(result, { status: result.error?.includes('not found') ? 404 : 400 });
-    }
-
-    return NextResponse.json(result);
+    // Para BNB, las recompensas se manejan en el contrato
+    return NextResponse.json({ 
+      success: true,
+      message: 'Rewards are now handled by the smart contract'
+    });
 
   } catch (error) {
     console.error('Claim rewards error:', error);
@@ -43,18 +33,10 @@ export async function POST(request: NextRequest) {
 
 export async function GET() {
   try {
-    const status = await getVaultStatus();
-    
-    if (!status) {
-      return NextResponse.json({ 
-        success: false, 
-        error: 'Creator wallet not configured' 
-      }, { status: 500 });
-    }
-
+    // Para BNB, el estado se obtiene del contrato
     return NextResponse.json({ 
       success: true,
-      ...status
+      message: 'Rewards status is now handled by the smart contract'
     });
 
   } catch (error) {
