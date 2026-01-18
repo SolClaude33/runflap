@@ -23,12 +23,14 @@ interface Racer {
   prevAngle: number;
 }
 
-const TOTAL_LAPS = 3;
+const TOTAL_LAPS = 5;
 
 interface RaceTrackProps {
   raceState: 'betting' | 'pre_countdown' | 'countdown' | 'racing' | 'finished';
   countdown: number | null;
   onRaceEnd: (winner: number) => void;
+  raceId: number; // ID de la carrera para seed determinístico
+  raceStartTime: number; // Timestamp del contrato cuando empieza la carrera (Unix timestamp)
 }
 
 // Professional F1/NASCAR hybrid oval track - clean racing circuit
@@ -71,7 +73,7 @@ const createInitialRacers = (seed: number = 0): Racer[] => {
   });
 };
 
-export default function RaceTrack({ raceState, countdown, onRaceEnd }: RaceTrackProps) {
+export default function RaceTrack({ raceState, countdown, onRaceEnd, raceId, raceStartTime }: RaceTrackProps) {
   const [racers, setRacers] = useState<Racer[]>(createInitialRacers());
   const [winner, setWinner] = useState<Racer | null>(null);
   const [totalLength, setTotalLength] = useState<number>(0);
@@ -92,9 +94,22 @@ export default function RaceTrack({ raceState, countdown, onRaceEnd }: RaceTrack
   
   const soundManager = useSoundManager();
 
+  // Calcular tiempo estimado para 3 vueltas
+  const calculateEstimatedRaceTime = (circuitLength: number): number => {
+    if (circuitLength === 0) return 0;
+    const TOTAL_DISTANCE = circuitLength * TOTAL_LAPS;
+    const AVG_SPEED = 390; // Velocidad promedio entre min (300) y max (480)
+    return TOTAL_DISTANCE / AVG_SPEED;
+  };
+
   useEffect(() => {
     if (pathRef.current) {
-      setTotalLength(pathRef.current.getTotalLength());
+      const length = pathRef.current.getTotalLength();
+      setTotalLength(length);
+      // Log para debugging
+      const estimatedTime = calculateEstimatedRaceTime(length);
+      console.log(`[RaceTrack] Circuit length: ${length.toFixed(2)} units`);
+      console.log(`[RaceTrack] Estimated time for ${TOTAL_LAPS} laps: ${estimatedTime.toFixed(2)}s`);
     }
   }, []);
 
@@ -141,12 +156,14 @@ export default function RaceTrack({ raceState, countdown, onRaceEnd }: RaceTrack
   };
 
   useEffect(() => {
-    if ((raceState === 'countdown' || raceState === 'racing') && totalLength > 0 && !racersReady) {
-      const seed = Date.now();
+    if ((raceState === 'countdown' || raceState === 'racing') && totalLength > 0 && !racersReady && raceId > 0) {
+      // Usar raceId como seed para que todos vean la misma carrera
+      // Esto asegura que todos los dispositivos tengan el mismo resultado
+      const seed = raceId;
       seedRef.current = seed;
       rngRef.current = createPRNG(seed);
       tickCounterRef.current = 0;
-      setRaceSeed(`${seed.toString(36).toUpperCase()}`);
+      setRaceSeed(`${raceId.toString(36).toUpperCase()}`);
       const resetRacers = createInitialRacers(seed);
       setRacers(resetRacers);
       racersRef.current = resetRacers;
@@ -155,7 +172,7 @@ export default function RaceTrack({ raceState, countdown, onRaceEnd }: RaceTrack
       raceTimeRef.current = 0;
       setRacersReady(true);
     }
-  }, [raceState, totalLength, racersReady]);
+  }, [raceState, totalLength, racersReady, raceId]);
 
   useEffect(() => {
     if (raceState === 'betting' || raceState === 'finished') {
@@ -201,7 +218,7 @@ export default function RaceTrack({ raceState, countdown, onRaceEnd }: RaceTrack
   }, [raceState, winner]);
 
   useEffect(() => {
-    if (raceState !== 'racing' || totalLength === 0 || !racersReady) {
+    if (raceState !== 'racing' || totalLength === 0 || !racersReady || raceStartTime === 0) {
       if (animationRef.current) {
         cancelAnimationFrame(animationRef.current);
         animationRef.current = null;
@@ -219,9 +236,17 @@ export default function RaceTrack({ raceState, countdown, onRaceEnd }: RaceTrack
     const animate = (currentTime: number) => {
       if (winnerFoundRef.current) return;
 
-      const deltaTime = Math.min((currentTime - lastTimeRef.current) / 1000, 0.05);
+      // Calcular tiempo de carrera basado en el tiempo del contrato (sincronización global)
+      const now = Math.floor(Date.now() / 1000);
+      const contractRaceTime = Math.max(0, now - raceStartTime);
+      
+      // Calcular deltaTime basado en el tiempo del contrato, no en tiempo local
+      // Esto asegura que todos los dispositivos vean la misma carrera
+      const previousContractTime = raceTimeRef.current;
+      const deltaTime = Math.min(Math.max(0, contractRaceTime - previousContractTime), 0.1);
+      raceTimeRef.current = contractRaceTime;
+      
       lastTimeRef.current = currentTime;
-      raceTimeRef.current += deltaTime;
       
       // Increment tick counter for deterministic RNG consumption
       tickCounterRef.current += 1;
@@ -834,6 +859,18 @@ export default function RaceTrack({ raceState, countdown, onRaceEnd }: RaceTrack
           <div className="text-[10px] text-white/80 mb-1">
             <span className="text-[#7cb894]">Time:</span> {raceTimeRef.current.toFixed(2)}s
           </div>
+          
+          {totalLength > 0 && (
+            <div className="text-[10px] text-white/80 mb-1">
+              <span className="text-[#7cb894]">Circuit:</span> {totalLength.toFixed(0)} units
+            </div>
+          )}
+          
+          {totalLength > 0 && (
+            <div className="text-[10px] text-white/80 mb-1">
+              <span className="text-[#7cb894]">Est. Time:</span> {calculateEstimatedRaceTime(totalLength).toFixed(1)}s for {TOTAL_LAPS} laps
+            </div>
+          )}
 
           <div className="text-[10px] text-[#7cb894] mb-1 mt-2">Live Speeds:</div>
           {racers.map(racer => (

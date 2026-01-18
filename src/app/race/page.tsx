@@ -81,20 +81,30 @@ export default function RacePage() {
       if (info) {
         setRaceInfo(info);
         
-        // Determinar estado basado en tiempos
+        // Determinar estado basado en tiempos del contrato (fuente de verdad)
+        // Usar tiempos del contrato para sincronización global
         const now = Math.floor(Date.now() / 1000);
         const startTime = Number(info.startTime);
         const bettingEndTime = Number(info.bettingEndTime);
+        const raceStartTime = bettingEndTime + PRE_COUNTDOWN_DURATION; // Cuando empieza la carrera visual
         const raceEndTime = Number(info.raceEndTime);
 
+        // Sincronizar estado basado en tiempos del contrato
         if (now < bettingEndTime) {
           setRaceState('betting');
           setBettingTimer(Math.max(0, bettingEndTime - now));
-        } else if (now < bettingEndTime + PRE_COUNTDOWN_DURATION) {
+        } else if (now < raceStartTime) {
           setRaceState('pre_countdown');
-          setPreCountdown(Math.max(0, bettingEndTime + PRE_COUNTDOWN_DURATION - now));
+          setPreCountdown(Math.max(0, raceStartTime - now));
         } else if (now < raceEndTime) {
           setRaceState('racing');
+          // Calcular countdown basado en tiempo del contrato
+          const timeSinceRaceStart = now - raceStartTime;
+          if (timeSinceRaceStart < 3) {
+            setCountdown(3 - timeSinceRaceStart);
+          } else {
+            setCountdown(null);
+          }
         } else if (info.finalized) {
           setRaceState('finished');
           if (info.winner > 0) {
@@ -126,63 +136,19 @@ export default function RacePage() {
   }, [provider, account]);
 
   // Actualizar datos periódicamente
+  // Durante carrera, actualizar cada 1 segundo para sincronización precisa
+  // Fuera de carrera, cada 5 segundos es suficiente
   useEffect(() => {
     if (!provider) return;
 
     fetchRaceData();
-    const interval = setInterval(fetchRaceData, 5000); // Actualizar cada 5 segundos
+    const updateInterval = (raceState === 'racing' || raceState === 'countdown' || raceState === 'pre_countdown') ? 1000 : 5000;
+    const interval = setInterval(fetchRaceData, updateInterval);
     return () => clearInterval(interval);
-  }, [provider, fetchRaceData]);
+  }, [provider, fetchRaceData, raceState]);
 
-  // Timer de apuestas
-  useEffect(() => {
-    if (raceState !== 'betting' || !raceInfo) return;
-
-    const interval = setInterval(() => {
-      const now = Math.floor(Date.now() / 1000);
-      const bettingEndTime = Number(raceInfo.bettingEndTime);
-      const remaining = Math.max(0, bettingEndTime - now);
-      
-      setBettingTimer(remaining);
-      
-      if (remaining <= 0) {
-        setRaceState('pre_countdown');
-        setPreCountdown(PRE_COUNTDOWN_DURATION);
-      }
-    }, 1000);
-
-    return () => clearInterval(interval);
-  }, [raceState, raceInfo]);
-
-  // Timer de pre-countdown
-  useEffect(() => {
-    if (raceState !== 'pre_countdown' || preCountdown === null) return;
-
-    if (preCountdown > 0) {
-      const timer = setTimeout(() => setPreCountdown(preCountdown - 1), 1000);
-      return () => clearTimeout(timer);
-    } else {
-      setPreCountdown(null);
-      setRaceState('countdown');
-      setCountdown(3);
-    }
-  }, [raceState, preCountdown]);
-
-  // Timer de countdown
-  useEffect(() => {
-    if (countdown === null || raceState !== 'countdown') return;
-    
-    if (countdown > 0) {
-      const timer = setTimeout(() => setCountdown(countdown - 1), 1000);
-      return () => clearTimeout(timer);
-    } else if (countdown === 0) {
-      const timer = setTimeout(() => {
-        setCountdown(null);
-        setRaceState('racing');
-      }, 500);
-      return () => clearTimeout(timer);
-    }
-  }, [countdown, raceState]);
+  // Los timers ahora se sincronizan con fetchRaceData que usa tiempos del contrato
+  // No necesitamos timers locales separados para evitar desincronización
 
   // Obtener montos válidos de apuesta
   useEffect(() => {
@@ -603,6 +569,8 @@ export default function RacePage() {
                 raceState={raceState}
                 countdown={countdown}
                 onRaceEnd={handleRaceEnd}
+                raceId={raceNumber}
+                raceStartTime={raceInfo ? Number(raceInfo.bettingEndTime) + PRE_COUNTDOWN_DURATION : 0}
               />
             )}
           </div>
