@@ -23,6 +23,7 @@ import {
   claimWinnings,
   getValidBetAmounts,
   getRaceStats,
+  getRaceSeed,
   type RaceInfo,
   type Bet,
   type CarStats,
@@ -54,6 +55,7 @@ export default function RacePage() {
   const [bets, setBets] = useState<Bet[]>([]);
   const [carStats, setCarStats] = useState<CarStats | null>(null);
   const [raceStats, setRaceStats] = useState<RaceStats | null>(null);
+  const [raceSeedData, setRaceSeedData] = useState<{ raceId: number; bettingEndTime: number; totalBets: number; blockHash: string } | null>(null);
   const [showProfileModal, setShowProfileModal] = useState(false);
   const [showHelpModal, setShowHelpModal] = useState(false);
   const [lastWinner, setLastWinner] = useState<number | null>(null);
@@ -124,6 +126,37 @@ export default function RacePage() {
       // Obtener estadísticas de la carrera
       const raceStatsData = await getRaceStats(provider, currentRace);
       setRaceStats(raceStatsData);
+      
+      // Obtener seed impredecible (incluye hash del bloque)
+      // Solo obtenerlo cuando las apuestas ya se cerraron (para evitar llamadas innecesarias)
+      if (info && raceStatsData && Number(info.bettingEndTime) <= Math.floor(Date.now() / 1000)) {
+        try {
+          const seedData = await getRaceSeed(
+            provider,
+            currentRace,
+            Number(info.bettingEndTime),
+            raceStatsData.totalBets
+          );
+          setRaceSeedData({
+            raceId: currentRace,
+            bettingEndTime: Number(info.bettingEndTime),
+            totalBets: raceStatsData.totalBets,
+            blockHash: seedData.blockHash,
+          });
+        } catch (error) {
+          console.error('Error getting race seed:', error);
+          // Fallback: usar datos sin hash del bloque
+          setRaceSeedData({
+            raceId: currentRace,
+            bettingEndTime: Number(info.bettingEndTime),
+            totalBets: raceStatsData.totalBets,
+            blockHash: '',
+          });
+        }
+      } else {
+        // Si las apuestas aún no se cierran, no hay seed disponible
+        setRaceSeedData(null);
+      }
 
       // Obtener apuesta del usuario
       if (account) {
@@ -571,6 +604,7 @@ export default function RacePage() {
                 onRaceEnd={handleRaceEnd}
                 raceId={raceNumber}
                 raceStartTime={raceInfo ? Number(raceInfo.bettingEndTime) + PRE_COUNTDOWN_DURATION : 0}
+                raceSeed={raceSeedData}
               />
             )}
           </div>

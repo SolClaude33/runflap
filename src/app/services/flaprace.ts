@@ -312,6 +312,67 @@ export const getRaceStats = async (
 };
 
 /**
+ * Obtener seed impredecible para la carrera
+ * Combina múltiples factores que no se conocen hasta que se cierran las apuestas:
+ * 1. raceId (determinístico pero necesario para sincronización)
+ * 2. bettingEndTime (timestamp cuando se cierran apuestas)
+ * 3. Hash del bloque cuando se cierran las apuestas (impredecible antes de ese momento)
+ * 4. Total de apuestas (impredecible antes de que se cierren)
+ * 
+ * Esto hace que sea prácticamente imposible predecir el resultado antes de que se cierren las apuestas
+ */
+export const getRaceSeed = async (
+  provider: ethers.BrowserProvider,
+  raceId: number,
+  bettingEndTime: number,
+  totalBets: number
+): Promise<{ seed: number; blockHash: string }> => {
+  try {
+    // Obtener el bloque que se minó cuando se cerraron las apuestas
+    const currentBlock = await provider.getBlockNumber();
+    let targetBlock = currentBlock;
+    
+    // Buscar el bloque más cercano al bettingEndTime
+    // BSC tiene ~3 segundos por bloque
+    const blocksToCheck = Math.min(100, Math.floor((Date.now() / 1000 - bettingEndTime) / 3));
+    
+    for (let i = 0; i < blocksToCheck; i++) {
+      const block = await provider.getBlock(currentBlock - i);
+      if (block && block.timestamp <= bettingEndTime) {
+        targetBlock = block.number;
+        break;
+      }
+    }
+    
+    // Obtener el hash del bloque
+    const block = await provider.getBlock(targetBlock);
+    let blockHashValue = 0;
+    let blockHash = '';
+    
+    if (block && block.hash) {
+      blockHash = block.hash;
+      // Convertir hash a número (tomar primeros 8 bytes)
+      const hashString = block.hash.slice(2); // Remover '0x'
+      const seedString = hashString.slice(0, 16); // Primeros 16 caracteres (8 bytes)
+      blockHashValue = parseInt(seedString, 16);
+    }
+    
+    // Combinar múltiples factores para crear un seed impredecible
+    // Usar XOR para combinar los valores
+    const seed = raceId ^ bettingEndTime ^ blockHashValue ^ totalBets;
+    
+    return { seed, blockHash };
+  } catch (error) {
+    console.error('Error getting race seed:', error);
+    // Fallback: usar combinación simple si falla
+    return { 
+      seed: raceId ^ bettingEndTime ^ totalBets,
+      blockHash: ''
+    };
+  }
+};
+
+/**
  * Obtener cantidad total de apuestas
  */
 export const getTotalBetsCount = async (

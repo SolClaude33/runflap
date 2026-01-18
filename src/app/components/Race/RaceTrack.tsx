@@ -31,6 +31,7 @@ interface RaceTrackProps {
   onRaceEnd: (winner: number) => void;
   raceId: number; // ID de la carrera para seed determinístico
   raceStartTime: number; // Timestamp del contrato cuando empieza la carrera (Unix timestamp)
+  raceSeed: { raceId: number; bettingEndTime: number; totalBets: number; blockHash: string } | null; // Datos para generar seed impredecible
 }
 
 // Professional F1/NASCAR hybrid oval track - clean racing circuit
@@ -73,7 +74,7 @@ const createInitialRacers = (seed: number = 0): Racer[] => {
   });
 };
 
-export default function RaceTrack({ raceState, countdown, onRaceEnd, raceId, raceStartTime }: RaceTrackProps) {
+export default function RaceTrack({ raceState, countdown, onRaceEnd, raceId, raceStartTime, raceSeed }: RaceTrackProps) {
   const [racers, setRacers] = useState<Racer[]>(createInitialRacers());
   const [winner, setWinner] = useState<Racer | null>(null);
   const [totalLength, setTotalLength] = useState<number>(0);
@@ -156,14 +157,28 @@ export default function RaceTrack({ raceState, countdown, onRaceEnd, raceId, rac
   };
 
   useEffect(() => {
-    if ((raceState === 'countdown' || raceState === 'racing') && totalLength > 0 && !racersReady && raceId > 0) {
-      // Usar raceId como seed para que todos vean la misma carrera
-      // Esto asegura que todos los dispositivos tengan el mismo resultado
-      const seed = raceId;
+    if ((raceState === 'countdown' || raceState === 'racing') && totalLength > 0 && !racersReady && raceId > 0 && raceSeed) {
+      // Generar seed impredecible combinando múltiples factores:
+      // 1. raceId (para sincronización)
+      // 2. bettingEndTime (timestamp cuando se cerraron apuestas)
+      // 3. blockHash (hash del bloque cuando se cerraron apuestas - impredecible)
+      // 4. totalBets (cantidad de apuestas, impredecible antes de cerrar)
+      // Esto hace que sea prácticamente imposible predecir el resultado antes de que se cierren las apuestas
+      
+      // Convertir blockHash a número si existe
+      let blockHashValue = 0;
+      if (raceSeed.blockHash) {
+        const hashString = raceSeed.blockHash.slice(2); // Remover '0x'
+        const seedString = hashString.slice(0, 16); // Primeros 16 caracteres (8 bytes)
+        blockHashValue = parseInt(seedString, 16);
+      }
+      
+      // Combinar todos los factores con XOR
+      const seed = raceSeed.raceId ^ raceSeed.bettingEndTime ^ blockHashValue ^ raceSeed.totalBets;
       seedRef.current = seed;
       rngRef.current = createPRNG(seed);
       tickCounterRef.current = 0;
-      setRaceSeed(`${raceId.toString(36).toUpperCase()}`);
+      setRaceSeed(`${seed.toString(36).toUpperCase()}`);
       const resetRacers = createInitialRacers(seed);
       setRacers(resetRacers);
       racersRef.current = resetRacers;
@@ -172,7 +187,7 @@ export default function RaceTrack({ raceState, countdown, onRaceEnd, raceId, rac
       raceTimeRef.current = 0;
       setRacersReady(true);
     }
-  }, [raceState, totalLength, racersReady, raceId]);
+  }, [raceState, totalLength, racersReady, raceId, raceSeed]);
 
   useEffect(() => {
     if (raceState === 'betting' || raceState === 'finished') {
