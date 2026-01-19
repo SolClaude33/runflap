@@ -1,0 +1,121 @@
+╔══════════════════════════════════════════════════════════════════════════╗
+║                                                                          ║
+║           🚨 QUÉ HACER AHORA - PASO A PASO SIMPLE 🚨                    ║
+║                                                                          ║
+╚══════════════════════════════════════════════════════════════════════════╝
+
+El problema de los ganadores diferentes ya está RESUELTO en el código.
+
+Ahora debes hacer esto en VERCEL:
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+PASO 1: IR A VERCEL
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+1. Abre tu navegador
+2. Ve a: https://vercel.com/dashboard
+3. Haz login si es necesario
+4. Click en tu proyecto (runflap o como se llame)
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+PASO 2: ACTUALIZAR LA DIRECCIÓN DEL CONTRATO
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+1. Click en "Settings" (arriba)
+2. Click en "Environment Variables" (menú izquierdo)
+3. Busca: NEXT_PUBLIC_FLAPRACE_ADDRESS
+4. Click en el icono de lápiz o los 3 puntos → Edit
+5. Cambia el valor a:
+
+   0x7d8B82E0B9905F8148A9a4b8a16617fF2C30afdC
+
+6. Click "Save"
+
+IMPORTANTE: Si NO existe esa variable, créala:
+   - Click "Add New" 
+   - Name: NEXT_PUBLIC_FLAPRACE_ADDRESS
+   - Value: 0x7d8B82E0B9905F8148A9a4b8a16617fF2C30afdC
+   - Selecciona: Production, Preview, Development (todos)
+   - Click "Save"
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+PASO 3: VERIFICAR OTRAS VARIABLES
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Asegúrate de que también tengas estas variables (créalas si no existen):
+
+Variable: NEXT_PUBLIC_RPC_URL
+Valor: https://bsc-testnet.public.blastapi.io
+
+Variable: OWNER_PRIVATE_KEY
+Valor: (tu clave privada del owner del contrato)
+NOTA: Esta debe estar SOLO marcada como SECRET
+
+Variable: API_KEY
+Valor: (cualquier clave secreta, ejemplo: secret123)
+NOTA: Esta debe estar SOLO marcada como SECRET
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+PASO 4: HACER REDEPLOY (SÚPER IMPORTANTE)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Las variables NO se aplican hasta que hagas un nuevo deployment.
+
+1. Click en "Deployments" (arriba)
+2. Busca el deployment más reciente (el primero de la lista)
+3. Click en los 3 puntos (...) a la derecha
+4. Click en "Redeploy"
+5. Marca la opción "Use existing Build Cache" (opcional, es más rápido)
+6. Click "Redeploy"
+7. ESPERA 1-2 minutos a que termine el deployment
+
+Verás un mensaje de "Building..." y luego "Ready"
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+PASO 5: PROBAR QUE FUNCIONE
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+1. Abre tu sitio web
+2. Presiona F12 para abrir la consola
+3. Haz una apuesta
+4. Espera a que termine el período de apuestas (2 minutos)
+5. Mira la consola, deberías ver:
+
+   ✅ [Race 1] Using contract seed: 87624529534...
+   ✅ [Race 1] ✅ Winner detected: Car 3
+
+6. NO deberías ver:
+   ❌ [Race 1] Using fallback seed: 123456
+   ❌ MetaMask pidiendo transacciones
+   ❌ Internal JSON-RPC error
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+RESUMEN
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+✅ Código subido a GitHub: ✓
+✅ Nuevo contrato desplegado: 0x7d8B82E0B9905F8148A9a4b8a16617fF2C30afdC
+
+🔴 FALTA HACER EN VERCEL:
+   1. Actualizar NEXT_PUBLIC_FLAPRACE_ADDRESS
+   2. Hacer REDEPLOY del proyecto
+   3. Probar en el sitio web
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+💡 AYUDA
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Si después de hacer el REDEPLOY sigue sin funcionar:
+1. Limpia la caché del navegador (Ctrl+Shift+Delete)
+2. Recarga la página (Ctrl+F5)
+3. Verifica en Settings → Environment Variables que la dirección 
+   del contrato sea: 0x7d8B82E0B9905F8148A9a4b8a16617fF2C30afdC
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
