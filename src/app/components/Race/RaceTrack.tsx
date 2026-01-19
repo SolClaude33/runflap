@@ -284,6 +284,9 @@ export default function RaceTrack({ raceState, countdown, onRaceEnd, raceId, rac
       const currentRacers = racersRef.current;
       let raceWinner: Racer | null = null;
 
+      // Constants
+      const RACE_DURATION_SECONDS = 30;
+
       // Calculate all racers' total distances for position sorting
       // Sort by total distance DESCENDING (highest distance = winner)
       const racerDistances = currentRacers.map(r => ({
@@ -369,7 +372,6 @@ export default function RaceTrack({ raceState, countdown, onRaceEnd, raceId, rac
         // Calculate distance traveled this frame
         // Speed is in units per second, deltaTime is in seconds
         // Adjust speed based on race progress to ensure race completes in ~30 seconds
-        const RACE_DURATION_SECONDS = 30;
         const raceProgress = contractRaceTime / RACE_DURATION_SECONDS;
         const totalDistanceNeeded = totalLength * TOTAL_LAPS;
         const distanceRemaining = totalDistanceNeeded - racerTotalDist;
@@ -466,7 +468,6 @@ export default function RaceTrack({ raceState, countdown, onRaceEnd, raceId, rac
 
       // Check if race time exceeded and determine winner by current position
       // Use contractRaceTime (synchronized) instead of raceTimeRef
-      const RACE_DURATION_SECONDS = 30;
       if (contractRaceTime >= RACE_DURATION_SECONDS && !winnerFoundRef.current) {
         // Calculate current positions after update
         const currentRacerDistances = updated.map(r => ({
