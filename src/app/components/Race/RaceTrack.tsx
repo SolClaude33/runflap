@@ -189,11 +189,27 @@ export default function RaceTrack({ raceState, countdown, onRaceEnd, raceId, rac
       racersRef.current = resetRacers;
       setWinner(null);
       winnerFoundRef.current = false;
-      raceTimeRef.current = 0; // Will be set from contract time on first frame
-      tickCounterRef.current = 0; // Reset tick counter
+      
+      // CRITICAL: Calculate initial race time from contract
+      // This ensures all clients start from the same point
+      const now = Math.floor(Date.now() / 1000);
+      const actualRaceStartTime = raceStartTime > 0 ? raceStartTime : now;
+      const initialContractRaceTime = Math.max(0, now - actualRaceStartTime);
+      raceTimeRef.current = initialContractRaceTime;
+      
+      // CRITICAL: Pre-consume RNG to sync with current contract time
+      // This ensures clients connecting late are synchronized
+      const initialTimeBasedTick = Math.floor(initialContractRaceTime * 10); // 10 ticks per second
+      // Pre-consume RNG for all ticks that have already passed
+      // This makes the RNG state identical for all clients regardless of when they connected
+      for (let i = 0; i < initialTimeBasedTick; i++) {
+        rngRef.current(); // Consume RNG without using the value
+      }
+      tickCounterRef.current = initialTimeBasedTick;
+      
       setRacersReady(true);
     }
-  }, [raceState, totalLength, racersReady, raceId, raceSeed]);
+  }, [raceState, totalLength, racersReady, raceId, raceSeed, raceStartTime]);
 
   useEffect(() => {
     if (raceState === 'betting' || raceState === 'finished') {
@@ -278,6 +294,15 @@ export default function RaceTrack({ raceState, countdown, onRaceEnd, raceId, rac
       // Use time-based ticks (every 0.1 seconds) instead of frame-based ticks
       // This ensures all clients consume RNG at the same rate regardless of FPS
       const timeBasedTick = Math.floor(contractRaceTime * 10); // 10 ticks per second
+      
+      // CRITICAL: If we're behind on RNG consumption (e.g., client connected late),
+      // catch up by consuming RNG for all missed ticks
+      // This ensures all clients have the same RNG state at any given contract time
+      while (tickCounterRef.current < timeBasedTick) {
+        rngRef.current(); // Consume RNG to catch up
+        tickCounterRef.current++;
+      }
+      
       const tick = timeBasedTick;
       const rng = rngRef.current;
 
