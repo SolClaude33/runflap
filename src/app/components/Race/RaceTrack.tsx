@@ -277,41 +277,6 @@ export default function RaceTrack({ raceState, countdown, onRaceEnd, raceId, rac
       
       lastTimeRef.current = currentTime;
       
-      // Check if race should end based on contract time (30 seconds)
-      const RACE_DURATION_SECONDS = 30;
-      if (contractRaceTime >= RACE_DURATION_SECONDS && !winnerFoundRef.current) {
-        // Race time exceeded - determine winner by current position
-        const currentRacers = racersRef.current;
-        const racerDistances = currentRacers.map(r => ({
-          id: r.id,
-          totalDist: (r.lap - 1) * totalLength + r.distance
-        })).sort((a, b) => b.totalDist - a.totalDist);
-        
-        if (racerDistances.length > 0) {
-          const winnerId = racerDistances[0].id;
-          const winnerRacer = currentRacers.find(r => r.id === winnerId);
-          if (winnerRacer) {
-            winnerFoundRef.current = true;
-            const raceWinner = {
-              ...winnerRacer,
-              distance: Math.min(winnerRacer.distance, totalLength),
-              lap: Math.min(winnerRacer.lap, TOTAL_LAPS),
-              finished: true,
-              finishTime: raceTimeRef.current,
-            };
-            setWinner(raceWinner);
-            setShowConfetti(true);
-            setShowCelebration(true);
-            onRaceEnd(raceWinner.id);
-            if (animationRef.current) {
-              cancelAnimationFrame(animationRef.current);
-              animationRef.current = null;
-            }
-            return;
-          }
-        }
-      }
-      
       // Increment tick counter for deterministic RNG consumption
       tickCounterRef.current += 1;
       const tick = tickCounterRef.current;
@@ -321,6 +286,7 @@ export default function RaceTrack({ raceState, countdown, onRaceEnd, raceId, rac
       let raceWinner: Racer | null = null;
 
       // Calculate all racers' total distances for position sorting
+      // Sort by total distance DESCENDING (highest distance = winner)
       const racerDistances = currentRacers.map(r => ({
         id: r.id,
         totalDist: (r.lap - 1) * totalLength + r.distance
@@ -432,7 +398,8 @@ export default function RaceTrack({ raceState, countdown, onRaceEnd, raceId, rac
         }
         
         // Also check if racer is on final lap and crosses finish line
-        if (racer.lap === TOTAL_LAPS && newDistance >= totalLength && !winnerFoundRef.current) {
+        // IMPORTANT: Check BEFORE updating distance to catch the exact moment of crossing
+        if (racer.lap === TOTAL_LAPS && racer.distance < totalLength && newDistance >= totalLength && !winnerFoundRef.current) {
           winnerFoundRef.current = true;
           raceWinner = {
             ...racer,
@@ -462,6 +429,7 @@ export default function RaceTrack({ raceState, countdown, onRaceEnd, raceId, rac
       racersRef.current = updated;
       setRacers([...updated]);
 
+      // Check for winner after updating positions
       if (raceWinner) {
         // Stop animation immediately
         if (animationRef.current) {
@@ -479,6 +447,40 @@ export default function RaceTrack({ raceState, countdown, onRaceEnd, raceId, rac
         
         console.log(`🏁 Race finished! Winner: ${raceWinner.name} (Car ${raceWinner.id})`);
         return;
+      }
+
+      // Check if race time exceeded and determine winner by current position
+      const RACE_DURATION_SECONDS = 30;
+      if (contractRaceTime >= RACE_DURATION_SECONDS && !winnerFoundRef.current) {
+        // Calculate current positions after update
+        const currentRacerDistances = updated.map(r => ({
+          id: r.id,
+          totalDist: (r.lap - 1) * totalLength + r.distance
+        })).sort((a, b) => b.totalDist - a.totalDist);
+        
+        if (currentRacerDistances.length > 0) {
+          const winnerId = currentRacerDistances[0].id; // Highest distance = winner
+          const winnerRacer = updated.find(r => r.id === winnerId);
+          if (winnerRacer) {
+            winnerFoundRef.current = true;
+            const raceWinner = {
+              ...winnerRacer,
+              distance: Math.min(winnerRacer.distance, totalLength),
+              lap: Math.min(winnerRacer.lap, TOTAL_LAPS),
+              finished: true,
+              finishTime: raceTimeRef.current,
+            };
+            setWinner(raceWinner);
+            setShowConfetti(true);
+            setShowCelebration(true);
+            onRaceEnd(raceWinner.id);
+            if (animationRef.current) {
+              cancelAnimationFrame(animationRef.current);
+              animationRef.current = null;
+            }
+            return;
+          }
+        }
       }
 
       // Continue animation

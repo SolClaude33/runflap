@@ -278,14 +278,14 @@ export default function RacePage() {
   // Timer local suave que se actualiza cada segundo
   // Usa los timestamps guardados del contrato para countdown suave
   useEffect(() => {
-    const timestamps = contractTimestampsRef.current;
-    if (!timestamps.bettingEndTime && !timestamps.raceStartTime && !timestamps.raceEndTime) {
-      // No hay timestamps guardados aún, esperar a que fetchRaceData los establezca
-      return;
-    }
-
     // Función para actualizar timers basado en tiempo actual
     const updateTimers = () => {
+      const timestamps = contractTimestampsRef.current;
+      if (!timestamps.bettingEndTime && !timestamps.raceStartTime && !timestamps.raceEndTime) {
+        // No hay timestamps guardados aún, esperar a que fetchRaceData los establezca
+        return;
+      }
+
       const currentTime = Math.floor(Date.now() / 1000);
       
       if (timestamps.bettingEndTime && currentTime < timestamps.bettingEndTime) {
@@ -316,7 +316,7 @@ export default function RacePage() {
     const timerInterval = setInterval(updateTimers, 1000);
     
     return () => clearInterval(timerInterval);
-  }, [raceState]); // Solo depende de raceState, no de raceInfo
+  }, [raceState, raceInfo]); // Depende de raceState y raceInfo para actualizar cuando cambien los timestamps
 
   // Obtener montos válidos de apuesta
   useEffect(() => {

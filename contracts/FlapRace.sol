@@ -223,8 +223,12 @@ contract FlapRace {
         uint256 totalPool = race.totalPool + race.nextRacePool; // Include next race pool if exists
         require(totalPool > 0, "No pool available");
         
-        // User receives their percentage of the total pool based on their bet
-        uint256 userShare = (bet.amount * totalPool) / winnerPool;
+        // User receives:
+        // 1. Their original bet amount back
+        // 2. Plus their percentage of the prize pool based on their bet percentage of the winner pool
+        // Example: If user bet 0.1 BNB and winner pool is 0.5 BNB, they get 20% of prize pool
+        uint256 userPercentageOfPool = (bet.amount * totalPool) / winnerPool;
+        uint256 userShare = bet.amount + userPercentageOfPool;
         require(userShare > 0, "Share is zero");
         require(address(this).balance >= userShare, "Insufficient contract balance");
         
