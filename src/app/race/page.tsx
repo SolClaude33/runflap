@@ -124,8 +124,15 @@ export default function RacePage() {
           const raceStartTime = bettingEndTime + PRE_COUNTDOWN_DURATION; // Cuando empieza la carrera visual
           const raceEndTime = Number(info.raceEndTime);
 
-          // Sincronizar estado basado en tiempos del contrato
-          if (now < bettingEndTime) {
+          // Si la carrera no ha sido inicializada (startTime = 0), significa que nadie ha apostado todavía
+          // En este caso, la carrera empezará cuando alguien apueste, pero mostramos estado de "betting" listo para apostar
+          if (startTime === 0 || bettingEndTime === 0) {
+            // Carrera no inicializada - está lista para que alguien apueste
+            // La carrera se inicializará automáticamente cuando alguien apueste
+            setRaceState('betting');
+            // No hay timer porque la carrera empezará cuando alguien apueste
+            setBettingTimer(BETTING_TIME);
+          } else if (now < bettingEndTime) {
             setRaceState('betting');
             setBettingTimer(Math.max(0, bettingEndTime - now));
           } else if (now < raceStartTime) {
@@ -145,6 +152,9 @@ export default function RacePage() {
             if (info.winner > 0) {
               setLastWinner(info.winner);
             }
+          } else {
+            // La carrera terminó pero no está finalizada
+            setRaceState('finished');
           }
         }
       } catch (error: any) {
@@ -152,6 +162,9 @@ export default function RacePage() {
         if (error.message !== 'Failed to get race info') {
           console.error('Error getting race info:', error);
         }
+        // Si no hay info, asumir que la carrera está lista para apostar
+        setRaceState('betting');
+        setBettingTimer(BETTING_TIME);
       }
 
       // Obtener apuestas (no crítico, puede fallar silenciosamente)
@@ -576,10 +589,18 @@ export default function RacePage() {
                   <div className="hidden md:block text-white/60 text-sm">Race #{raceNumber}</div>
                 </div>
                 <div className="flex items-center gap-2">
-                  <div className="hidden md:block text-white/80 text-sm">Starting in</div>
-                  <div className="bg-black/50 border-2 border-[#d4a517] rounded-xl px-4 md:px-6 py-1 md:py-2">
-                    <span className="text-[#d4a517] text-2xl md:text-4xl font-bold" style={{ textShadow: '0 0 20px rgba(212,165,23,0.6)' }}>{bettingTimer}s</span>
-                  </div>
+                  {raceInfo && raceInfo.startTime > 0 ? (
+                    <>
+                      <div className="hidden md:block text-white/80 text-sm">Starting in</div>
+                      <div className="bg-black/50 border-2 border-[#d4a517] rounded-xl px-4 md:px-6 py-1 md:py-2">
+                        <span className="text-[#d4a517] text-2xl md:text-4xl font-bold" style={{ textShadow: '0 0 20px rgba(212,165,23,0.6)' }}>{bettingTimer}s</span>
+                      </div>
+                    </>
+                  ) : (
+                    <div className="bg-black/50 border-2 border-[#d4a517] rounded-xl px-4 md:px-6 py-1 md:py-2">
+                      <span className="text-[#d4a517] text-sm md:text-base font-bold">Race starts when first bet is placed</span>
+                    </div>
+                  )}
                 </div>
               </>
             )}
