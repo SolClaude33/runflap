@@ -56,6 +56,7 @@ export default function RacePage() {
   const [selectedCar, setSelectedCar] = useState<number | null>(null);
   const [raceNumber, setRaceNumber] = useState(0);
   const [raceInfo, setRaceInfo] = useState<RaceInfo | null>(null);
+  const [previousRaceInfo, setPreviousRaceInfo] = useState<RaceInfo | null>(null); // Info de la carrera anterior
   const [bets, setBets] = useState<Bet[]>([]);
   const [carStats, setCarStats] = useState<CarStats | null>(null);
   const [raceStats, setRaceStats] = useState<RaceStats | null>(null);
@@ -888,6 +889,12 @@ export default function RacePage() {
                 <div className="flex items-center gap-2 md:gap-4">
                   <div className="text-white text-sm md:text-xl font-bold tracking-wider">PLACE YOUR BETS!</div>
                   <div className="hidden md:block text-white/60 text-sm">Race #{raceNumber}</div>
+                  {previousRaceInfo && previousRaceInfo.finalized && previousRaceInfo.winner > 0 && (
+                    <div className="hidden md:block bg-[#22c55e]/20 border border-[#22c55e] rounded-lg px-2 py-1 text-xs">
+                      <span className="text-[#7cb894]">Prev: </span>
+                      <span className="text-[#22c55e] font-semibold">{getCarName(previousRaceInfo.winner)}</span>
+                    </div>
+                  )}
                 </div>
                 <div className="flex items-center gap-2">
                   {raceInfo && raceInfo.startTime > 0 ? (
