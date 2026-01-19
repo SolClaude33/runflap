@@ -132,9 +132,10 @@ contract FlapRace {
             
             // CRITICAL: Generate seed for PREVIOUS race if it wasn't generated yet
             // This ensures the seed is available before the visual race starts
+            // IMPORTANT: Only generate if betting period has ended for previous race
             if (raceId > 0) {
                 Race storage previousRace = races[raceId - 1];
-                if (previousRace.startTime > 0 && !previousRace.seedGenerated) {
+                if (previousRace.startTime > 0 && !previousRace.seedGenerated && block.timestamp >= previousRace.bettingEndTime) {
                     _generateRaceSeedInternal(raceId - 1);
                 }
             }

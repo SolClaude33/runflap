@@ -1,0 +1,32 @@
+🔥 NUEVO CONTRATO DESPLEGADO
+============================
+
+Dirección del contrato actualizado (con fix de sincronización):
+0x7d8B82E0B9905F8148A9a4b8a16617fF2C30afdC
+
+PASOS PARA ACTUALIZAR VERCEL:
+==============================
+
+1. Ir a: https://vercel.com/dashboard
+2. Seleccionar tu proyecto "runflap" o como se llame
+3. Click en "Settings" (arriba)
+4. Click en "Environment Variables" (lado izquierdo)
+5. Buscar: NEXT_PUBLIC_FLAPRACE_ADDRESS
+6. Click en el icono de lápiz (Edit) o los 3 puntos → Edit
+7. Cambiar el valor a: 0x7d8B82E0B9905F8148A9a4b8a16617fF2C30afdC
+8. Click "Save"
+9. Ir a "Deployments" (arriba)
+10. En el último deployment, click en los 3 puntos → "Redeploy"
+11. Confirmar "Redeploy"
+12. Esperar 1-2 minutos a que termine
+
+IMPORTANTE:
+- Después de actualizar, debes FORZAR un nuevo deployment
+- O espera a que se dispare automáticamente con el próximo push
+- Los cambios de variables de entorno NO se aplican hasta el siguiente deployment
+
+PARA VERIFICAR:
+- Abre la consola del navegador en tu sitio
+- Debería ver logs como "[Race X] Using contract seed: [número]"
+- NO debería ver "Using fallback seed: 123456"
+- NO debería ver "Contract seed not ready"
