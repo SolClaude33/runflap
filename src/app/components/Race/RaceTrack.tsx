@@ -168,16 +168,18 @@ export default function RaceTrack({ raceState, countdown, onRaceEnd, raceId, rac
       
       let contractSeed: number;
       
-      if (raceSeed && raceSeed.generated) {
+      if (raceSeed && raceSeed.generated && raceSeed.seed !== 0) {
         // CRITICAL: Use the seed from the contract
         // This is THE ONLY source of truth for the race
+        // ALL clients MUST use the exact same seed for perfect synchronization
         contractSeed = raceSeed.seed;
-        console.log(`[RaceTrack] Using contract seed: ${contractSeed} for race ${raceId}`);
+        console.log(`[RaceTrack] ✅ Using contract seed: ${contractSeed} for race ${raceId}`);
       } else {
-        // Fallback: If seed not available yet (shouldn't happen in normal flow)
-        // Use raceId as temporary seed
-        contractSeed = raceId * 12345; // Simple fallback
-        console.warn(`[RaceTrack] WARNING: Contract seed not available for race ${raceId}, using fallback!`);
+        // Fallback: If seed not available yet
+        // This can happen if betting just closed and seed is being generated
+        // Use a temporary deterministic seed based on raceId only
+        contractSeed = raceId * 999999 + 123456;
+        console.warn(`[RaceTrack] ⚠️ WARNING: Contract seed not ready for race ${raceId} (seed: ${raceSeed?.seed}, generated: ${raceSeed?.generated}). Using fallback seed: ${contractSeed}. Race may not be synchronized!`);
       }
       
       // CRITICAL: Ensure seed is a 32-bit unsigned integer for consistent PRNG
