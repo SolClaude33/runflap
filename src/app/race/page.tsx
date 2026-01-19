@@ -85,6 +85,9 @@ export default function RacePage() {
   const [isOwner, setIsOwner] = useState(false);
   const [contractBalance, setContractBalance] = useState<bigint>(BigInt(0));
   const [showWithdrawModal, setShowWithdrawModal] = useState(false);
+  const [showFinalizeModal, setShowFinalizeModal] = useState(false);
+  const [finalizeRaceId, setFinalizeRaceId] = useState<string>('');
+  const [finalizeWinner, setFinalizeWinner] = useState<number>(1);
   
   const videoRef = useRef<HTMLVideoElement>(null);
 
