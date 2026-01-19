@@ -202,10 +202,12 @@ export default function RaceTrack({ raceState, countdown, onRaceEnd, raceId, rac
       const initialTimeBasedTick = Math.floor(initialContractRaceTime * 10); // 10 ticks per second
       // Pre-consume RNG for all ticks that have already passed
       // This makes the RNG state identical for all clients regardless of when they connected
-      for (let i = 0; i < initialTimeBasedTick; i++) {
+      // Limit pre-consumption to prevent performance issues (max 300 ticks = 30 seconds)
+      const maxPreConsume = Math.min(initialTimeBasedTick, 300);
+      for (let i = 0; i < maxPreConsume; i++) {
         rngRef.current(); // Consume RNG without using the value
       }
-      tickCounterRef.current = initialTimeBasedTick;
+      tickCounterRef.current = maxPreConsume;
       
       setRacersReady(true);
     }
@@ -282,11 +284,24 @@ export default function RaceTrack({ raceState, countdown, onRaceEnd, raceId, rac
       
       // Use contract time directly - this is the synchronized time for all clients
       const previousRaceTime = raceTimeRef.current;
-      raceTimeRef.current = contractRaceTime;
       
-      // Calculate deltaTime from contract time (not local frame time)
-      // This ensures all clients advance at the same rate
-      const deltaTime = Math.max(0, Math.min(contractRaceTime - previousRaceTime, 0.1)); // Cap at 100ms max per frame
+      // CRITICAL: If client is far behind (e.g., just connected), catch up quickly
+      // But limit catch-up to prevent huge jumps that look unnatural
+      const timeDiff = contractRaceTime - previousRaceTime;
+      let deltaTime: number;
+      
+      if (timeDiff > 1.0) {
+        // Client is more than 1 second behind - catch up in larger steps
+        // This happens when client connects late to an ongoing race
+        deltaTime = Math.min(timeDiff, 0.5); // Max 0.5s per frame for catch-up
+        raceTimeRef.current = previousRaceTime + deltaTime;
+      } else {
+        // Normal operation - use smooth frame-based deltaTime
+        // Use actual frame time for smooth animation, but sync with contract time
+        const frameDelta = (currentTime - lastTimeRef.current) / 1000;
+        deltaTime = Math.min(frameDelta, 0.033); // Cap at ~30fps minimum
+        raceTimeRef.current = contractRaceTime; // Sync to contract time
+      }
       
       lastTimeRef.current = currentTime;
       
@@ -408,10 +423,11 @@ export default function RaceTrack({ raceState, countdown, onRaceEnd, raceId, rac
         let adjustedSpeed = newSpeed;
         if (timeRemaining > 0 && distanceRemaining > 0 && !isFinalSeconds) {
           const requiredSpeed = distanceRemaining / timeRemaining;
-          // Blend between current speed and required speed (85% current, 15% required)
-          adjustedSpeed = newSpeed * 0.85 + requiredSpeed * 0.15;
+          // Blend between current speed and required speed (70% current, 30% required)
+          // Increased required speed influence to ensure race completes in time
+          adjustedSpeed = newSpeed * 0.70 + requiredSpeed * 0.30;
           // Clamp to reasonable range (wider range)
-          adjustedSpeed = Math.max(300, Math.min(650, adjustedSpeed));
+          adjustedSpeed = Math.max(350, Math.min(700, adjustedSpeed));
         } else if (isFinalSeconds) {
           // In final seconds, use natural speed with minimal adjustment to create clear separation
           adjustedSpeed = newSpeed;
