@@ -44,6 +44,8 @@ contract FlapRace {
         bool finalized;
         uint256 totalPool;
         uint256 nextRacePool; // Losers' funds that go to the next race pool
+        uint256 raceSeed; // Deterministic seed generated when betting closes
+        bool seedGenerated; // Whether the seed has been generated
     }
 
     // Configuration
@@ -67,6 +69,7 @@ contract FlapRace {
     // Events
     event BetPlaced(address indexed user, uint256 indexed raceId, uint8 carId, uint256 amount);
     event RaceStarted(uint256 indexed raceId, uint256 startTime);
+    event RaceSeedGenerated(uint256 indexed raceId, uint256 seed);
     event RaceEnded(uint256 indexed raceId, uint8 winner);
     event WinningsClaimed(address indexed user, uint256 indexed raceId, uint256 amount);
     event NextRacePoolUpdated(uint256 indexed raceId, uint256 amount);
@@ -153,6 +156,68 @@ contract FlapRace {
         race.totalPool += msg.value;
         
         emit BetPlaced(msg.sender, raceId, carId, msg.value);
+    }
+
+    /**
+     * @dev Generate deterministic seed for race
+     * Can be called by anyone once betting period ends
+     * CRITICAL: This must be called BEFORE the race visual starts
+     * @param raceId Race ID
+     */
+    function generateRaceSeed(uint256 raceId) external {
+        Race storage race = races[raceId];
+        require(race.startTime > 0, "Race does not exist");
+        require(!race.seedGenerated, "Seed already generated");
+        require(block.timestamp >= race.bettingEndTime, "Betting period not ended yet");
+        
+        // Generate deterministic seed combining:
+        // 1. raceId (for uniqueness)
+        // 2. bettingEndTime (timestamp when betting closed)
+        // 3. block.difficulty or block.prevrandao (unpredictable before betting closes)
+        // 4. Total number of bets (unpredictable before betting closes)
+        // 5. Total pool amount (unpredictable before betting closes)
+        
+        // Get blockhash from a recent block for unpredictability
+        // Use the block number when betting ended
+        uint256 blockNumber = block.number;
+        bytes32 blockHash = blockhash(blockNumber - 1); // Previous block hash
+        
+        // If blockhash is 0 (too old, >256 blocks), use current block data
+        if (blockHash == bytes32(0)) {
+            blockHash = blockhash(block.number - 1);
+        }
+        
+        // Combine all factors into a deterministic seed
+        // Use block.prevrandao (or block.difficulty on older chains) for additional randomness
+        uint256 randomFactor;
+        // Try to use prevrandao (post-merge Ethereum/BSC)
+        // This will be different for each block but same for all clients reading the same block
+        assembly {
+            randomFactor := prevrandao()
+        }
+        
+        // If prevrandao is 0, fallback to difficulty
+        if (randomFactor == 0) {
+            randomFactor = block.difficulty;
+        }
+        
+        // Calculate total bets for this race
+        uint256 totalBets = raceBets[raceId].length;
+        
+        // Combine all factors using XOR and hashing for uniform distribution
+        race.raceSeed = uint256(keccak256(abi.encodePacked(
+            raceId,
+            race.bettingEndTime,
+            blockHash,
+            randomFactor,
+            totalBets,
+            race.totalPool,
+            block.timestamp
+        )));
+        
+        race.seedGenerated = true;
+        
+        emit RaceSeedGenerated(raceId, race.raceSeed);
     }
 
     /**
@@ -302,7 +367,9 @@ contract FlapRace {
         uint8 winner,
         bool finalized,
         uint256 totalPool,
-        uint256 nextRacePool
+        uint256 nextRacePool,
+        uint256 raceSeed,
+        bool seedGenerated
     ) {
         Race memory race = races[raceId];
         return (
@@ -312,8 +379,18 @@ contract FlapRace {
             race.winner,
             race.finalized,
             race.totalPool,
-            race.nextRacePool
+            race.nextRacePool,
+            race.raceSeed,
+            race.seedGenerated
         );
+    }
+    
+    /**
+     * @dev Get race seed (convenience function)
+     */
+    function getRaceSeed(uint256 raceId) external view returns (uint256 seed, bool generated) {
+        Race memory race = races[raceId];
+        return (race.raceSeed, race.seedGenerated);
     }
 
     /**

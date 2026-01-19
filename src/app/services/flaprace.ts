@@ -487,9 +487,56 @@ const FLAPRACE_ABI = [
 				"internalType": "uint256",
 				"name": "nextRacePool",
 				"type": "uint256"
+			},
+			{
+				"internalType": "uint256",
+				"name": "raceSeed",
+				"type": "uint256"
+			},
+			{
+				"internalType": "bool",
+				"name": "seedGenerated",
+				"type": "bool"
 			}
 		],
 		"stateMutability": "view",
+		"type": "function"
+	},
+	{
+		"inputs": [
+			{
+				"internalType": "uint256",
+				"name": "raceId",
+				"type": "uint256"
+			}
+		],
+		"name": "getRaceSeed",
+		"outputs": [
+			{
+				"internalType": "uint256",
+				"name": "seed",
+				"type": "uint256"
+			},
+			{
+				"internalType": "bool",
+				"name": "generated",
+				"type": "bool"
+			}
+		],
+		"stateMutability": "view",
+		"type": "function"
+	},
+	{
+		"inputs": [
+			{
+				"internalType": "uint256",
+				"name": "raceId",
+				"type": "uint256"
+			}
+		],
+		"name": "generateRaceSeed",
+		"outputs": [],
+		"stateMutability": "nonpayable",
 		"type": "function"
 	},
 	{
@@ -839,6 +886,8 @@ export interface RaceInfo {
   finalized: boolean;
   totalPool: bigint;
   nextRacePool: bigint;
+  raceSeed: bigint;
+  seedGenerated: boolean;
 }
 
 export interface Bet {
@@ -964,6 +1013,8 @@ export const getRaceInfo = async (
       finalized: info.finalized,
       totalPool: info.totalPool,
       nextRacePool: info.nextRacePool,
+      raceSeed: info.raceSeed,
+      seedGenerated: info.seedGenerated,
     };
   } catch (error) {
     console.error('Error getting race info:', error);
@@ -1116,7 +1167,60 @@ export const getRaceStats = async (
 };
 
 /**
- * Obtener seed impredecible para la carrera
+ * Generar seed para una carrera (llama al contrato)
+ * CRITICAL: This should be called by anyone once betting closes
+ * The contract will generate a deterministic seed that all clients will use
+ */
+export const generateRaceSeed = async (
+  signer: ethers.JsonRpcSigner,
+  raceId: number
+): Promise<{ success: boolean; txHash?: string; error?: string }> => {
+  try {
+    const contract = getContract(signer);
+    const tx = await contract.generateRaceSeed(raceId);
+    const receipt = await tx.wait();
+    
+    return {
+      success: true,
+      txHash: receipt.hash,
+    };
+  } catch (error: any) {
+    console.error('Error generating race seed:', error);
+    return {
+      success: false,
+      error: error.reason || error.message || 'Error al generar seed',
+    };
+  }
+};
+
+/**
+ * Obtener seed de una carrera directamente del contrato
+ * CRITICAL: All clients MUST use this seed for synchronization
+ */
+export const getContractRaceSeed = async (
+  provider: ethers.BrowserProvider,
+  raceId: number
+): Promise<{ seed: number; generated: boolean } | null> => {
+  try {
+    const contract = getContractReadOnly(provider);
+    const result = await contract.getRaceSeed(raceId);
+    
+    // Convert BigInt to number safely (32-bit)
+    const seed = Number(result.seed & BigInt(0xFFFFFFFF));
+    
+    return {
+      seed,
+      generated: result.generated,
+    };
+  } catch (error) {
+    console.error('Error getting contract race seed:', error);
+    return null;
+  }
+};
+
+/**
+ * @deprecated Use getContractRaceSeed instead
+ * Obtener seed impredecible para la carrera (OLD METHOD - NO LONGER USED)
  * Combina múltiples factores que no se conocen hasta que se cierran las apuestas:
  * 1. raceId (determinístico pero necesario para sincronización)
  * 2. bettingEndTime (timestamp cuando se cierran apuestas)

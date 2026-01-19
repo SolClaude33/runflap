@@ -5,7 +5,8 @@ import { ethers } from 'ethers';
 const FLAPRACE_ABI = [
   "function finalizeRace(uint256 raceId, uint8 winner)",
   "function getCurrentRaceId() view returns (uint256)",
-  "function getRaceInfo(uint256 raceId) view returns (uint256 startTime, uint256 bettingEndTime, uint256 raceEndTime, uint8 winner, bool finalized, uint256 totalPool, uint256 nextRacePool)",
+  "function getRaceInfo(uint256 raceId) view returns (uint256 startTime, uint256 bettingEndTime, uint256 raceEndTime, uint8 winner, bool finalized, uint256 totalPool, uint256 nextRacePool, uint256 raceSeed, bool seedGenerated)",
+  "function generateRaceSeed(uint256 raceId)",
 ];
 
 // Esta clave privada debe estar en variables de entorno y ser del owner del contrato

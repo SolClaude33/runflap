@@ -31,7 +31,7 @@ interface RaceTrackProps {
   onRaceEnd: (winner: number) => void;
   raceId: number; // ID de la carrera para seed determinístico
   raceStartTime: number; // Timestamp del contrato cuando empieza la carrera (Unix timestamp)
-  raceSeed: { raceId: number; bettingEndTime: number; totalBets: number; blockHash: string } | null; // Datos para generar seed impredecible
+  raceSeed: { seed: number; generated: boolean } | null; // Seed del contrato (CRITICAL: todos los clientes deben usar el mismo)
 }
 
 // Professional F1/NASCAR hybrid oval track - clean racing circuit
@@ -161,44 +161,32 @@ export default function RaceTrack({ raceState, countdown, onRaceEnd, raceId, rac
   useEffect(() => {
     // Initialize racers even if raceSeed is null (use fallback seed)
     if ((raceState === 'countdown' || raceState === 'racing') && totalLength > 0 && !racersReady && raceId >= 0) {
-      // Generar seed impredecible combinando múltiples factores:
-      // 1. raceId (para sincronización)
-      // 2. bettingEndTime (timestamp cuando se cerraron apuestas)
-      // 3. blockHash (hash del bloque cuando se cerraron apuestas - impredecible)
-      // 4. totalBets (cantidad de apuestas, impredecible antes de cerrar)
-      // Esto hace que sea prácticamente imposible predecir el resultado antes de que se cierren las apuestas
+      // CRITICAL: Use seed directly from contract
+      // ALL clients MUST use the exact same seed from the contract for synchronization
+      // The contract generates a deterministic seed when betting closes
+      // This ensures perfect synchronization across all clients
       
-      // CRITICAL: Calculate seed deterministically for all clients
-      // Convert blockHash to number using a more robust method
-      let blockHashValue = 0;
-      if (raceSeed && raceSeed.blockHash) {
-        const hashString = raceSeed.blockHash.slice(2); // Remover '0x'
-        // Use first 16 characters (8 bytes) for consistency
-        const seedString = hashString.slice(0, 16);
-        // Use BigInt for precision, then convert to Number
-        // This ensures exact same conversion for all clients
-        try {
-          blockHashValue = Number(BigInt('0x' + seedString) & BigInt(0xFFFFFFFF));
-        } catch {
-          // Fallback to parseInt if BigInt fails
-          blockHashValue = parseInt(seedString, 16) & 0xFFFFFFFF;
-        }
+      let contractSeed: number;
+      
+      if (raceSeed && raceSeed.generated) {
+        // CRITICAL: Use the seed from the contract
+        // This is THE ONLY source of truth for the race
+        contractSeed = raceSeed.seed;
+        console.log(`[RaceTrack] Using contract seed: ${contractSeed} for race ${raceId}`);
+      } else {
+        // Fallback: If seed not available yet (shouldn't happen in normal flow)
+        // Use raceId as temporary seed
+        contractSeed = raceId * 12345; // Simple fallback
+        console.warn(`[RaceTrack] WARNING: Contract seed not available for race ${raceId}, using fallback!`);
       }
       
-      // CRITICAL: Combine factors in exact same order for all clients
-      // Use XOR which is commutative and associative, ensuring same result
-      // Order: raceId, bettingEndTime, blockHashValue, totalBets
-      const seed = raceSeed 
-        ? (raceSeed.raceId ^ raceSeed.bettingEndTime ^ blockHashValue ^ raceSeed.totalBets)
-        : (raceId ^ Math.floor(Date.now() / 1000));
-      
-      // CRITICAL: Ensure seed is a 32-bit integer for consistent PRNG
-      const normalizedSeed = (seed >>> 0); // Convert to unsigned 32-bit integer
+      // CRITICAL: Ensure seed is a 32-bit unsigned integer for consistent PRNG
+      const normalizedSeed = (contractSeed >>> 0);
       seedRef.current = normalizedSeed;
       rngRef.current = createPRNG(normalizedSeed);
       tickCounterRef.current = 0;
       setDisplaySeed(`${normalizedSeed.toString(36).toUpperCase()}`);
-      const resetRacers = createInitialRacers(seed);
+      const resetRacers = createInitialRacers(normalizedSeed);
       setRacers(resetRacers);
       racersRef.current = resetRacers;
       setWinner(null);
