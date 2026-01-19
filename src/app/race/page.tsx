@@ -24,6 +24,7 @@ import {
   getValidBetAmounts,
   getRaceStats,
   getContractRaceSeed,
+  generateRaceSeed,
   getContractOwner,
   getContractBalance,
   withdraw,
@@ -242,35 +243,68 @@ export default function RacePage() {
       
       // Obtener seed del contrato (CRÍTICO para sincronización)
       // Solo intentar obtenerlo cuando las apuestas ya se cerraron
-      // El seed se auto-genera en el contrato cuando alguien lo solicita
+      // CRITICAL: Seed generation logic
       if (info && Number(info.bettingEndTime) <= Math.floor(Date.now() / 1000)) {
         try {
-          // CRITICAL: Get seed directly from contract
-          // The contract will auto-generate it if not generated yet
-          // All clients will get the SAME seed (synchronized)
-          const contractSeed = await callWithTimeout(
+          // Step 1: Try to get the seed (view call, no gas)
+          let contractSeed = await callWithTimeout(
             getContractRaceSeed(provider, currentRace),
-            8000, // Increased timeout for seed generation
+            5000,
             'Failed to get contract race seed'
           );
           
+          // Step 2: If seed is not generated yet, trigger generation (requires transaction)
+          if (contractSeed && !contractSeed.generated && account) {
+            // Only try to generate once per race to avoid spamming
+            const generateKey = `seed_gen_${currentRace}`;
+            const lastGenerateAttempt = sessionStorage.getItem(generateKey);
+            const now = Date.now();
+            
+            // Only attempt once every 30 seconds
+            if (!lastGenerateAttempt || now - parseInt(lastGenerateAttempt) > 30000) {
+              console.log(`[Race ${currentRace}] Seed not generated, attempting to generate...`);
+              sessionStorage.setItem(generateKey, now.toString());
+              
+              try {
+                const signer = await provider.getSigner();
+                const result = await generateRaceSeed(signer, currentRace);
+                
+                if (result.success) {
+                  console.log(`[Race ${currentRace}] Seed generation transaction sent: ${result.txHash}`);
+                  
+                  // Wait a bit and try to read again
+                  await new Promise(resolve => setTimeout(resolve, 2000));
+                  contractSeed = await callWithTimeout(
+                    getContractRaceSeed(provider, currentRace),
+                    5000,
+                    'Failed to get contract race seed after generation'
+                  );
+                } else {
+                  console.error(`[Race ${currentRace}] Failed to generate seed:`, result.error);
+                }
+              } catch (genError) {
+                console.error(`[Race ${currentRace}] Error generating seed:`, genError);
+              }
+            }
+          }
+          
+          // Step 3: Store the seed data
           if (contractSeed) {
-            // Store seed data
             setRaceSeedData({
               seed: contractSeed.seed,
               generated: contractSeed.generated,
             });
             
             if (contractSeed.generated && contractSeed.seed !== 0) {
-              console.log(`[Race ${currentRace}] Using contract seed: ${contractSeed.seed}`);
+              console.log(`[Race ${currentRace}] ✅ Using contract seed: ${contractSeed.seed}`);
             } else {
-              console.log(`[Race ${currentRace}] Seed not available yet (seed: ${contractSeed.seed}, generated: ${contractSeed.generated})`);
+              console.log(`[Race ${currentRace}] ⏳ Seed not available yet (waiting for generation)`);
             }
           } else {
             setRaceSeedData(null);
           }
         } catch (error) {
-          console.error('Error getting contract race seed:', error);
+          console.error('Error in seed handling:', error);
           setRaceSeedData(null);
         }
       } else {
@@ -335,7 +369,7 @@ export default function RacePage() {
           : 0;
         if (timeSinceRaceStart < 3) {
           setCountdown(Math.max(0, 3 - timeSinceRaceStart));
-        } else {
+    } else {
           setCountdown(null);
         }
       }
@@ -520,7 +554,7 @@ export default function RacePage() {
               finalizingRaceRef.current.delete(raceNumber);
             }
           }
-        } catch (error) {
+          } catch (error) {
           console.error('Failed to finalize race:', error);
           // Remove from set on error and retry after a delay
           finalizingRaceRef.current.delete(raceNumber);
@@ -737,27 +771,27 @@ export default function RacePage() {
         <div className="absolute top-16 right-4 bg-[#0d3320] border-2 border-[#2d6b4a] rounded-xl p-4 z-50 min-w-[200px] shadow-xl">
           <WalletButton />
           <div className="mt-3 space-y-2">
-            <button 
-              onClick={() => {
+              <button 
+                onClick={() => {
                 setTestMode(!testMode);
-                setShowMenu(false);
-              }}
+                  setShowMenu(false);
+                }}
               className={`w-full text-left py-2 px-3 rounded-lg flex items-center gap-2 transition-colors ${testMode ? 'bg-[#d4a517]/20 text-[#d4a517]' : 'hover:bg-[#1a4a2e]'}`}
-            >
+              >
               <FaFlask /> {testMode ? 'Exit Test Mode' : 'Test Mode'}
-            </button>
+              </button>
             {isOwner && (
               <>
-                <button 
-                  onClick={() => {
+            <button 
+              onClick={() => {
                     setShowWithdrawModal(true);
-                    setShowMenu(false);
-                  }}
+                setShowMenu(false);
+              }}
                   className="w-full text-left py-2 px-3 rounded-lg flex items-center gap-2 transition-colors hover:bg-[#1a4a2e] text-[#d4a517]"
-                >
+            >
                   💰 Withdraw Funds
-                </button>
-                <button 
+            </button>
+          <button 
                   onClick={() => {
                     setShowFinalizeModal(true);
                     setShowMenu(false);
@@ -765,7 +799,7 @@ export default function RacePage() {
                   className="w-full text-left py-2 px-3 rounded-lg flex items-center gap-2 transition-colors hover:bg-[#1a4a2e] text-[#d4a517]"
                 >
                   🏁 Finalize Race
-                </button>
+          </button>
               </>
             )}
           </div>
@@ -884,10 +918,10 @@ export default function RacePage() {
           {raceState === 'finished' && (
             <div className="space-y-2">
               {lastWinner && (
-                <div className="bg-[#d4a517]/20 border-2 border-[#d4a517] rounded-xl p-2 text-center">
+                  <div className="bg-[#d4a517]/20 border-2 border-[#d4a517] rounded-xl p-2 text-center">
                   <div className="text-[#d4a517] text-xs">Visual Winner</div>
                   <div className="font-bold">{getCarName(lastWinner)}</div>
-                </div>
+                  </div>
               )}
               {raceInfo?.finalized && raceInfo.winner > 0 && (
                 <div className="bg-[#22c55e]/20 border-2 border-[#22c55e] rounded-xl p-2 text-center">
@@ -898,14 +932,14 @@ export default function RacePage() {
                   )}
                   {lastWinner && lastWinner === raceInfo.winner && (
                     <div className="text-green-400 text-xs mt-1">✅ Match</div>
-                  )}
-                </div>
-              )}
+                )}
+              </div>
+            )}
               {raceState === 'finished' && !raceInfo?.finalized && (
                 <div className="bg-[#f59e0b]/20 border-2 border-[#f59e0b] rounded-xl p-2 text-center">
                   <div className="text-[#f59e0b] text-xs">Status</div>
                   <div className="text-sm">⏳ Not finalized yet</div>
-                </div>
+          </div>
               )}
             </div>
           )}
@@ -928,10 +962,10 @@ export default function RacePage() {
                 <div className="flex items-center gap-2">
                   {raceInfo && raceInfo.startTime > 0 ? (
                     <>
-                      <div className="hidden md:block text-white/80 text-sm">Starting in</div>
-                      <div className="bg-black/50 border-2 border-[#d4a517] rounded-xl px-4 md:px-6 py-1 md:py-2">
-                        <span className="text-[#d4a517] text-2xl md:text-4xl font-bold" style={{ textShadow: '0 0 20px rgba(212,165,23,0.6)' }}>{bettingTimer}s</span>
-                      </div>
+                  <div className="hidden md:block text-white/80 text-sm">Starting in</div>
+                  <div className="bg-black/50 border-2 border-[#d4a517] rounded-xl px-4 md:px-6 py-1 md:py-2">
+                    <span className="text-[#d4a517] text-2xl md:text-4xl font-bold" style={{ textShadow: '0 0 20px rgba(212,165,23,0.6)' }}>{bettingTimer}s</span>
+                  </div>
                     </>
                   ) : (
                     <div className="bg-black/50 border-2 border-[#d4a517] rounded-xl px-4 md:px-6 py-1 md:py-2">
@@ -974,7 +1008,7 @@ export default function RacePage() {
                   {lastWinner && (
                     <div className="bg-[#d4a517]/20 border-2 border-[#d4a517] rounded-xl px-3 md:px-4 py-1 md:py-2">
                       <span className="text-[#d4a517] text-xs md:text-sm font-semibold">Visual: {getCarName(lastWinner)}</span>
-                    </div>
+                  </div>
                   )}
                   {raceInfo?.finalized && raceInfo.winner > 0 && (
                     <div className={`${lastWinner === raceInfo.winner ? 'bg-[#22c55e]/20 border-[#22c55e]' : 'bg-[#22c55e]/20 border-[#22c55e]'} border-2 rounded-xl px-3 md:px-4 py-1 md:py-2`}>
@@ -1091,7 +1125,7 @@ export default function RacePage() {
                 <div className="mt-2 space-y-1">
                   <div className="text-[#7cb894] text-xs">
                     <span className="text-white font-semibold">{raceStats.totalBettors}</span> people bet
-                  </div>
+            </div>
                   <div className="text-[#7cb894] text-xs">
                     Added: <span className="text-[#d4a517] font-semibold">{ethers.formatEther(raceStats.totalPool)} BNB</span>
                   </div>

@@ -160,35 +160,36 @@ contract FlapRace {
 
     /**
      * @dev Internal function to generate race seed deterministically
-     * CRITICAL: This function MUST generate the SAME seed for ALL clients
-     * The seed is based on: race data + earliest available block hash after betting closes
-     * This ensures synchronization while maintaining unpredictability
+     * CRITICAL FIX: Generates seed ONCE and stores it on-chain
+     * 
+     * SOLUTION TO SYNCHRONIZATION PROBLEM:
+     * - The first person to call this after betting ends generates the seed
+     * - The seed is based on IMMUTABLE race data + block hash at time of generation
+     * - The seed is STORED on-chain (race.raceSeed)
+     * - All subsequent calls return without regenerating (idempotent)
+     * - Everyone reads the SAME stored seed value
+     * 
+     * This ensures perfect synchronization across all clients.
      */
     function _generateRaceSeedInternal(uint256 raceId) internal {
         Race storage race = races[raceId];
         
+        // CRITICAL: Prevent regeneration if seed already exists
+        // This is the KEY to synchronization - once generated, it never changes
+        if (race.seedGenerated) {
+            return; // Already generated, do not regenerate
+        }
+        
         // Calculate total bets for this race
         uint256 totalBets = raceBets[raceId].length;
         
-        // CRITICAL: We need a deterministic but unpredictable source
-        // We use the blockhash of a specific block relative to betting end time
-        // BSC has ~3 second blocks, so we calculate which block was closest to bettingEndTime
+        // Use the previous block's hash for unpredictability
+        // This is available to everyone and provides randomness
+        bytes32 recentBlockHash = blockhash(block.number - 1);
         
-        // All clients will calculate the same reference block
-        uint256 blocksAfterBetting = (block.timestamp - race.bettingEndTime) / 3; // ~3s per block
-        
-        // Get a recent blockhash (within last 256 blocks for it to be available)
-        // We target the block 5 blocks after betting ended to ensure it exists
-        uint256 targetBlocksBack = blocksAfterBetting > 5 ? blocksAfterBetting - 5 : 0;
-        
-        // Ensure we stay within the 256 block limit
-        targetBlocksBack = targetBlocksBack > 255 ? 255 : targetBlocksBack;
-        
-        bytes32 referenceBlockHash = blockhash(block.number - targetBlocksBack);
-        
-        // If blockhash is not available (should not happen if called within reasonable time)
-        // Use fallback deterministic seed
-        if (referenceBlockHash == bytes32(0)) {
+        // If blockhash not available (edge case), use pure deterministic seed
+        if (recentBlockHash == bytes32(0)) {
+            // Fallback: Use only race data (fully deterministic)
             race.raceSeed = uint256(keccak256(abi.encodePacked(
                 raceId,
                 race.bettingEndTime,
@@ -198,32 +199,20 @@ contract FlapRace {
             )));
         } else {
             // Primary method: Combine block hash with race data
+            // This provides unpredictability while being deterministic once generated
             race.raceSeed = uint256(keccak256(abi.encodePacked(
                 raceId,
                 race.bettingEndTime,
-                referenceBlockHash,
+                recentBlockHash,
                 totalBets,
                 race.totalPool
             )));
         }
         
+        // CRITICAL: Mark as generated and emit event
+        // This prevents any future regeneration
         race.seedGenerated = true;
         emit RaceSeedGenerated(raceId, race.raceSeed);
-    }
-    
-    /**
-     * @dev Generate deterministic seed for race
-     * Can be called by anyone once betting period ends
-     * CRITICAL: This must be called BEFORE the race visual starts
-     * @param raceId Race ID
-     */
-    function generateRaceSeed(uint256 raceId) external {
-        Race storage race = races[raceId];
-        require(race.startTime > 0, "Race does not exist");
-        require(!race.seedGenerated, "Seed already generated");
-        require(block.timestamp >= race.bettingEndTime, "Betting period not ended yet");
-        
-        _generateRaceSeedInternal(raceId);
     }
 
     /**
@@ -397,18 +386,26 @@ contract FlapRace {
     }
     
     /**
-     * @dev Get race seed (convenience function)
-     * Automatically generates seed if not generated yet and betting has closed
+     * @dev Get race seed (read-only)
+     * Returns the current seed without generating it
      */
-    function getRaceSeed(uint256 raceId) external returns (uint256 seed, bool generated) {
-        Race storage race = races[raceId];
-        
-        // Auto-generate seed if betting has closed and seed not generated yet
-        if (!race.seedGenerated && race.startTime > 0 && block.timestamp >= race.bettingEndTime) {
-            _generateRaceSeedInternal(raceId);
-        }
-        
+    function getRaceSeed(uint256 raceId) external view returns (uint256 seed, bool generated) {
+        Race memory race = races[raceId];
         return (race.raceSeed, race.seedGenerated);
+    }
+    
+    /**
+     * @dev Generate race seed (public function, requires transaction)
+     * Anyone can call this once betting has closed to generate the seed
+     * Subsequent calls will not regenerate the seed (idempotent)
+     */
+    function generateRaceSeed(uint256 raceId) external {
+        Race storage race = races[raceId];
+        require(race.startTime > 0, "Race does not exist");
+        require(block.timestamp >= race.bettingEndTime, "Betting period not ended yet");
+        
+        // This will only generate if not already generated (idempotent)
+        _generateRaceSeedInternal(raceId);
     }
 
     /**
