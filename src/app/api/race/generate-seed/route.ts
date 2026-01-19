@@ -15,7 +15,7 @@ const RPC_URL = process.env.NEXT_PUBLIC_RPC_URL || 'https://bsc-testnet.public.b
 /**
  * GET /api/race/generate-seed
  * Cron job que genera el seed automáticamente cuando termina el betting period
- * Debe ser llamado cada 10-30 segundos por Vercel Cron o similar
+ * Debe ser llamado cada minuto por Vercel Cron
  */
 export async function GET(req: NextRequest) {
   try {
