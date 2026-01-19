@@ -257,8 +257,48 @@ export default function RacePage() {
     return () => clearInterval(interval);
   }, [provider, fetchRaceData, raceState]);
 
-  // Los timers ahora se sincronizan con fetchRaceData que usa tiempos del contrato
-  // No necesitamos timers locales separados para evitar desincronización
+  // Timer local suave que se actualiza cada segundo
+  // Se sincroniza con los tiempos del contrato cuando fetchRaceData se ejecuta
+  useEffect(() => {
+    if (!raceInfo || raceInfo.startTime === 0) return;
+
+    const now = Math.floor(Date.now() / 1000);
+    const startTime = Number(raceInfo.startTime);
+    const bettingEndTime = Number(raceInfo.bettingEndTime);
+    const raceStartTime = bettingEndTime + PRE_COUNTDOWN_DURATION;
+    const raceEndTime = Number(raceInfo.raceEndTime);
+
+    // Función para actualizar timers basado en tiempo actual
+    const updateTimers = () => {
+      const currentTime = Math.floor(Date.now() / 1000);
+      
+      if (currentTime < bettingEndTime) {
+        // Betting phase
+        const remaining = Math.max(0, bettingEndTime - currentTime);
+        setBettingTimer(Math.ceil(remaining));
+      } else if (currentTime < raceStartTime) {
+        // Pre-countdown phase
+        const remaining = Math.max(0, raceStartTime - currentTime);
+        setPreCountdown(Math.ceil(remaining));
+      } else if (currentTime < raceEndTime) {
+        // Racing phase
+        const timeSinceRaceStart = currentTime - raceStartTime;
+        if (timeSinceRaceStart < 3) {
+          setCountdown(Math.max(0, 3 - timeSinceRaceStart));
+        } else {
+          setCountdown(null);
+        }
+      }
+    };
+
+    // Actualizar inmediatamente
+    updateTimers();
+
+    // Actualizar cada segundo para timer suave
+    const timerInterval = setInterval(updateTimers, 1000);
+    
+    return () => clearInterval(timerInterval);
+  }, [raceInfo, raceState]);
 
   // Obtener montos válidos de apuesta
   useEffect(() => {
