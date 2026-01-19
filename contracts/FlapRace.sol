@@ -129,6 +129,15 @@ contract FlapRace {
             race.totalPool = race.nextRacePool; // Include pool from previous race
             race.nextRacePool = 0; // Reset nextRacePool since it's now in totalPool
             emit RaceStarted(raceId, race.startTime);
+            
+            // CRITICAL: Generate seed for PREVIOUS race if it wasn't generated yet
+            // This ensures the seed is available before the visual race starts
+            if (raceId > 0) {
+                Race storage previousRace = races[raceId - 1];
+                if (previousRace.startTime > 0 && !previousRace.seedGenerated) {
+                    _generateRaceSeedInternal(raceId - 1);
+                }
+            }
         }
         
         // Verify we are in betting period
@@ -183,31 +192,18 @@ contract FlapRace {
         // Calculate total bets for this race
         uint256 totalBets = raceBets[raceId].length;
         
-        // Use the previous block's hash for unpredictability
-        // This is available to everyone and provides randomness
-        bytes32 recentBlockHash = blockhash(block.number - 1);
-        
-        // If blockhash not available (edge case), use pure deterministic seed
-        if (recentBlockHash == bytes32(0)) {
-            // Fallback: Use only race data (fully deterministic)
-            race.raceSeed = uint256(keccak256(abi.encodePacked(
-                raceId,
-                race.bettingEndTime,
-                race.startTime,
-                totalBets,
-                race.totalPool
-            )));
-        } else {
-            // Primary method: Combine block hash with race data
-            // This provides unpredictability while being deterministic once generated
-            race.raceSeed = uint256(keccak256(abi.encodePacked(
-                raceId,
-                race.bettingEndTime,
-                recentBlockHash,
-                totalBets,
-                race.totalPool
-            )));
-        }
+        // CRITICAL FIX FOR SYNCHRONIZATION:
+        // Use ONLY deterministic data that NEVER changes
+        // NO blockhash - it's different for different clients calling at different times
+        // This makes the seed predictable but CONSISTENT for all clients
+        race.raceSeed = uint256(keccak256(abi.encodePacked(
+            raceId,
+            race.bettingEndTime,
+            race.startTime,
+            totalBets,
+            race.totalPool,
+            address(this) // Add contract address for uniqueness across deployments
+        )));
         
         // CRITICAL: Mark as generated and emit event
         // This prevents any future regeneration
