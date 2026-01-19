@@ -1061,6 +1061,19 @@ export default function RacePage() {
                   </div>
                 </div>
               )}
+              {/* Contract Winner Display (Mobile) */}
+              {raceInfo?.finalized && raceInfo.winner > 0 && (
+                <div className="mt-3 pt-3 border-t border-[#2d6b4a]">
+                  <div className="text-[#22c55e] text-xs font-medium mb-1">Contract Winner</div>
+                  <div className="font-bold text-lg text-[#22c55e]">{getCarName(raceInfo.winner)}</div>
+                  {lastWinner && lastWinner !== raceInfo.winner && (
+                    <div className="text-red-400 text-xs mt-1">⚠️ Visual: {getCarName(lastWinner)}</div>
+                  )}
+                  {lastWinner && lastWinner === raceInfo.winner && (
+                    <div className="text-green-400 text-xs mt-1">✅ Match</div>
+                  )}
+                </div>
+              )}
             </div>
 
             {userBet && (
