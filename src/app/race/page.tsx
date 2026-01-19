@@ -71,71 +71,122 @@ export default function RacePage() {
   
   const videoRef = useRef<HTMLVideoElement>(null);
 
+  // Helper para hacer llamadas con timeout
+  const callWithTimeout = async <T,>(
+    promise: Promise<T>,
+    timeoutMs: number = 10000,
+    errorMessage: string = 'Timeout'
+  ): Promise<T> => {
+    return Promise.race([
+      promise,
+      new Promise<T>((_, reject) =>
+        setTimeout(() => reject(new Error(errorMessage)), timeoutMs)
+      ),
+    ]);
+  };
+
   // Obtener información de la carrera desde el contrato
   const fetchRaceData = useCallback(async () => {
     if (!provider) return;
 
     try {
-      const currentRace = await getCurrentRaceId(provider);
-      setRaceNumber(currentRace);
+      // Verificar que el provider esté listo
+      try {
+        await callWithTimeout(provider.getNetwork(), 3000, 'Provider not ready');
+      } catch (error) {
+        // Si el provider no está listo, no hacer nada
+        return;
+      }
 
-      const info = await getRaceInfo(provider, currentRace);
-      if (info) {
-        setRaceInfo(info);
-        
-        // Determinar estado basado en tiempos del contrato (fuente de verdad)
-        // Usar tiempos del contrato para sincronización global
-        const now = Math.floor(Date.now() / 1000);
-        const startTime = Number(info.startTime);
-        const bettingEndTime = Number(info.bettingEndTime);
-        const raceStartTime = bettingEndTime + PRE_COUNTDOWN_DURATION; // Cuando empieza la carrera visual
-        const raceEndTime = Number(info.raceEndTime);
+      let currentRace: number;
+      try {
+        currentRace = await callWithTimeout(getCurrentRaceId(provider), 5000, 'Failed to get race ID');
+        setRaceNumber(currentRace);
+      } catch (error: any) {
+        // Si falla obtener el race ID, no continuar
+        if (error.message !== 'Failed to get race ID') {
+          console.error('Error getting current race ID:', error);
+        }
+        return;
+      }
 
-        // Sincronizar estado basado en tiempos del contrato
-        if (now < bettingEndTime) {
-          setRaceState('betting');
-          setBettingTimer(Math.max(0, bettingEndTime - now));
-        } else if (now < raceStartTime) {
-          setRaceState('pre_countdown');
-          setPreCountdown(Math.max(0, raceStartTime - now));
-        } else if (now < raceEndTime) {
-          setRaceState('racing');
-          // Calcular countdown basado en tiempo del contrato
-          const timeSinceRaceStart = now - raceStartTime;
-          if (timeSinceRaceStart < 3) {
-            setCountdown(3 - timeSinceRaceStart);
-          } else {
-            setCountdown(null);
+      let info: RaceInfo | null = null;
+      try {
+        info = await callWithTimeout(getRaceInfo(provider, currentRace), 5000, 'Failed to get race info');
+        if (info) {
+          setRaceInfo(info);
+          
+          // Determinar estado basado en tiempos del contrato (fuente de verdad)
+          // Usar tiempos del contrato para sincronización global
+          const now = Math.floor(Date.now() / 1000);
+          const startTime = Number(info.startTime);
+          const bettingEndTime = Number(info.bettingEndTime);
+          const raceStartTime = bettingEndTime + PRE_COUNTDOWN_DURATION; // Cuando empieza la carrera visual
+          const raceEndTime = Number(info.raceEndTime);
+
+          // Sincronizar estado basado en tiempos del contrato
+          if (now < bettingEndTime) {
+            setRaceState('betting');
+            setBettingTimer(Math.max(0, bettingEndTime - now));
+          } else if (now < raceStartTime) {
+            setRaceState('pre_countdown');
+            setPreCountdown(Math.max(0, raceStartTime - now));
+          } else if (now < raceEndTime) {
+            setRaceState('racing');
+            // Calcular countdown basado en tiempo del contrato
+            const timeSinceRaceStart = now - raceStartTime;
+            if (timeSinceRaceStart < 3) {
+              setCountdown(3 - timeSinceRaceStart);
+            } else {
+              setCountdown(null);
+            }
+          } else if (info.finalized) {
+            setRaceState('finished');
+            if (info.winner > 0) {
+              setLastWinner(info.winner);
+            }
           }
-        } else if (info.finalized) {
-          setRaceState('finished');
-          if (info.winner > 0) {
-            setLastWinner(info.winner);
-          }
+        }
+      } catch (error: any) {
+        // Si falla obtener race info, continuar con otros datos si es posible
+        if (error.message !== 'Failed to get race info') {
+          console.error('Error getting race info:', error);
         }
       }
 
-      // Obtener apuestas
-      const raceBets = await getRaceBets(provider, currentRace);
-      setBets(raceBets);
+      // Obtener apuestas (no crítico, puede fallar silenciosamente)
+      try {
+        const raceBets = await callWithTimeout(getRaceBets(provider, currentRace), 5000);
+        setBets(raceBets);
+      } catch (error) {
+        // Silenciar errores de RPC para no spamear la consola
+      }
 
-      // Obtener estadísticas de autos
-      const stats = await getCarStats(provider, currentRace);
-      setCarStats(stats);
+      // Obtener estadísticas de autos (no crítico)
+      try {
+        const stats = await callWithTimeout(getCarStats(provider, currentRace), 5000);
+        setCarStats(stats);
+      } catch (error) {
+        // Silenciar errores
+      }
 
-      // Obtener estadísticas de la carrera
-      const raceStatsData = await getRaceStats(provider, currentRace);
-      setRaceStats(raceStatsData);
+      // Obtener estadísticas de la carrera (no crítico)
+      let raceStatsData: RaceStats | null = null;
+      try {
+        raceStatsData = await callWithTimeout(getRaceStats(provider, currentRace), 5000);
+        setRaceStats(raceStatsData);
+      } catch (error) {
+        // Silenciar errores
+      }
       
       // Obtener seed impredecible (incluye hash del bloque)
       // Solo obtenerlo cuando las apuestas ya se cerraron (para evitar llamadas innecesarias)
       if (info && raceStatsData && Number(info.bettingEndTime) <= Math.floor(Date.now() / 1000)) {
         try {
-          const seedData = await getRaceSeed(
-            provider,
-            currentRace,
-            Number(info.bettingEndTime),
-            raceStatsData.totalBets
+          const seedData = await callWithTimeout(
+            getRaceSeed(provider, currentRace, Number(info.bettingEndTime), raceStatsData.totalBets),
+            10000, // Más tiempo para obtener el bloque
+            'Failed to get race seed'
           );
           setRaceSeedData({
             raceId: currentRace,
@@ -144,7 +195,6 @@ export default function RacePage() {
             blockHash: seedData.blockHash,
           });
         } catch (error) {
-          console.error('Error getting race seed:', error);
           // Fallback: usar datos sin hash del bloque
           setRaceSeedData({
             raceId: currentRace,
@@ -158,13 +208,20 @@ export default function RacePage() {
         setRaceSeedData(null);
       }
 
-      // Obtener apuesta del usuario
+      // Obtener apuesta del usuario (no crítico)
       if (account) {
-        const userBetData = await getUserBet(provider, account, currentRace);
-        setUserBet(userBetData);
+        try {
+          const userBetData = await callWithTimeout(getUserBet(provider, account, currentRace), 5000);
+          setUserBet(userBetData);
+        } catch (error) {
+          // Silenciar errores
+        }
       }
-    } catch (error) {
-      console.error('Error fetching race data:', error);
+    } catch (error: any) {
+      // Solo loggear errores críticos que no sean de timeout/RPC
+      if (error.message && !error.message.includes('Timeout') && !error.message.includes('RPC')) {
+        console.error('Error fetching race data:', error);
+      }
     }
   }, [provider, account]);
 

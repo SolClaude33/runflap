@@ -37,6 +37,10 @@ const Web3Context = createContext<Web3ContextType>({
 
 export const useWeb3Context = () => useContext(Web3Context);
 
+// Additional WebSocket RPCs (for direct ethers.js connections if needed)
+// wss://bsc-rpc.publicnode.com
+// wss://bsc.drpc.org
+
 // BNB Smart Chain Mainnet
 const BSC_MAINNET = {
   chainId: '0x38', // 56 in decimal
@@ -46,7 +50,16 @@ const BSC_MAINNET = {
     symbol: 'BNB',
     decimals: 18,
   },
-  rpcUrls: ['https://bsc-dataseed1.binance.org/'],
+  rpcUrls: [
+    'https://bsc-dataseed1.binance.org/',
+    'https://bsc-dataseed2.binance.org/',
+    'https://bsc-dataseed3.binance.org/',
+    'https://bsc-dataseed4.binance.org/',
+    'https://bsc-dataseed1.defibit.io/',
+    'https://bsc-dataseed1.nodereal.io',
+    'https://bsc.blockrazor.xyz',
+    'https://public-bsc-mainnet.fastnode.io',
+  ],
   blockExplorerUrls: ['https://bscscan.com/'],
 };
 
@@ -59,7 +72,13 @@ const BSC_TESTNET = {
     symbol: 'BNB',
     decimals: 18,
   },
-  rpcUrls: ['https://data-seed-prebsc-1-s1.binance.org:8545/'],
+  rpcUrls: [
+    'https://data-seed-prebsc-1-s1.binance.org:8545/',
+    'https://data-seed-prebsc-1-s2.binance.org:8545/',
+    'https://data-seed-prebsc-2-s1.binance.org:8545/',
+    'https://data-seed-prebsc-2-s2.binance.org:8545/',
+    'https://data-seed-prebsc-1-s3.binance.org:8545/',
+  ],
   blockExplorerUrls: ['https://testnet.bscscan.com/'],
 };
 
@@ -90,13 +109,42 @@ export const Web3Provider: FC<{ children: ReactNode }> = ({ children }) => {
     }
 
     try {
+      // Verificar que window.ethereum esté disponible
+      if (!window.ethereum) {
+        throw new Error('MetaMask no está disponible');
+      }
+
       const provider = new ethers.BrowserProvider(window.ethereum);
       
-      // Solicitar conexión
-      await provider.send('eth_requestAccounts', []);
+      // Solicitar conexión con timeout
+      try {
+        await Promise.race([
+          provider.send('eth_requestAccounts', []),
+          new Promise((_, reject) => 
+            setTimeout(() => reject(new Error('Timeout al conectar')), 10000)
+          )
+        ]);
+      } catch (error: any) {
+        if (error.message === 'Timeout al conectar') {
+          throw new Error('Tiempo de espera agotado. Por favor intenta de nuevo.');
+        }
+        throw error;
+      }
+      
+      // Esperar un momento para que MetaMask se sincronice
+      await new Promise(resolve => setTimeout(resolve, 500));
       
       // Verificar/cambiar a BSC
-      const network = await provider.getNetwork();
+      let network;
+      try {
+        network = await provider.getNetwork();
+      } catch (error) {
+        console.error('Error getting network:', error);
+        // Intentar de nuevo después de un momento
+        await new Promise(resolve => setTimeout(resolve, 1000));
+        network = await provider.getNetwork();
+      }
+      
       const chainId = `0x${network.chainId.toString(16)}`;
       
       if (chainId !== CHAIN_CONFIG.chainId) {
@@ -105,6 +153,8 @@ export const Web3Provider: FC<{ children: ReactNode }> = ({ children }) => {
             method: 'wallet_switchEthereumChain',
             params: [{ chainId: CHAIN_CONFIG.chainId }],
           });
+          // Esperar a que la red cambie
+          await new Promise(resolve => setTimeout(resolve, 1000));
         } catch (switchError: any) {
           // Si la red no existe, agregarla
           if (switchError.code === 4902) {
@@ -112,15 +162,36 @@ export const Web3Provider: FC<{ children: ReactNode }> = ({ children }) => {
               method: 'wallet_addEthereumChain',
               params: [CHAIN_CONFIG],
             });
+            // Esperar a que la red se agregue
+            await new Promise(resolve => setTimeout(resolve, 1000));
           } else {
             throw switchError;
           }
         }
       }
 
-      const signer = await provider.getSigner();
-      const address = await signer.getAddress();
-      const bal = await provider.getBalance(address);
+      // Obtener signer y datos con manejo de errores
+      let signer, address, bal;
+      try {
+        signer = await provider.getSigner();
+        address = await signer.getAddress();
+        
+        // Intentar obtener balance con retry
+        let retries = 3;
+        while (retries > 0) {
+          try {
+            bal = await provider.getBalance(address);
+            break;
+          } catch (error) {
+            retries--;
+            if (retries === 0) throw error;
+            await new Promise(resolve => setTimeout(resolve, 1000));
+          }
+        }
+      } catch (error) {
+        console.error('Error getting signer/balance:', error);
+        throw new Error('Error al obtener información de la wallet. Por favor intenta de nuevo.');
+      }
       
       setProvider(provider);
       setSigner(signer);
@@ -128,12 +199,17 @@ export const Web3Provider: FC<{ children: ReactNode }> = ({ children }) => {
       setBalance(parseFloat(ethers.formatEther(bal)));
       setIsConnected(true);
 
-      // Escuchar cambios de cuenta
-      window.ethereum.on('accountsChanged', handleAccountsChanged);
-      window.ethereum.on('chainChanged', handleChainChanged);
-    } catch (error) {
+      // Escuchar cambios de cuenta (solo si no están ya registrados)
+      if (window.ethereum) {
+        window.ethereum.removeListener('accountsChanged', handleAccountsChanged);
+        window.ethereum.removeListener('chainChanged', handleChainChanged);
+        window.ethereum.on('accountsChanged', handleAccountsChanged);
+        window.ethereum.on('chainChanged', handleChainChanged);
+      }
+    } catch (error: any) {
       console.error('Error connecting wallet:', error);
-      alert('Error al conectar la wallet. Por favor intenta de nuevo.');
+      const errorMessage = error.message || 'Error al conectar la wallet. Por favor intenta de nuevo.';
+      alert(errorMessage);
     }
   };
 
@@ -179,15 +255,24 @@ export const Web3Provider: FC<{ children: ReactNode }> = ({ children }) => {
 
     const updateBalance = async () => {
       try {
-        const bal = await provider.getBalance(account);
+        // Agregar timeout para evitar que se quede colgado
+        const bal = await Promise.race([
+          provider.getBalance(account),
+          new Promise<never>((_, reject) => 
+            setTimeout(() => reject(new Error('Timeout')), 5000)
+          )
+        ]);
         setBalance(parseFloat(ethers.formatEther(bal)));
       } catch (error) {
-        console.error('Error fetching balance:', error);
+        // Silenciar errores de timeout o RPC para no spamear la consola
+        if (error instanceof Error && error.message !== 'Timeout') {
+          console.error('Error fetching balance:', error);
+        }
       }
     };
 
     updateBalance();
-    const interval = setInterval(updateBalance, 10000);
+    const interval = setInterval(updateBalance, 30000); // Aumentar intervalo a 30s para reducir carga
     return () => clearInterval(interval);
   }, [provider, account]);
 
