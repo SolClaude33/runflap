@@ -130,6 +130,18 @@ export default function RacePage() {
         if (currentRace !== raceNumber) {
           winnerDetectedRef.current.delete(raceNumber); // Clear old race
           finalizingRaceRef.current.delete(raceNumber); // Clear old race finalization
+          
+          // Si cambió la carrera, obtener info de la carrera anterior
+          if (currentRace > 0 && raceNumber > 0) {
+            try {
+              const prevRaceInfo = await callWithTimeout(getRaceInfo(provider, raceNumber), 5000, 'Failed to get previous race info');
+              if (prevRaceInfo && prevRaceInfo.finalized && prevRaceInfo.winner > 0) {
+                setPreviousRaceInfo(prevRaceInfo);
+              }
+            } catch (error) {
+              // Silenciar errores al obtener carrera anterior
+            }
+          }
         }
         
         setRaceNumber(currentRace);
