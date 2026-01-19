@@ -593,11 +593,12 @@ export default function RacePage() {
   const showRace = raceState === 'countdown' || raceState === 'racing' || raceState === 'finished';
   const showPreCountdown = raceState === 'pre_countdown';
 
-  useEffect(() => {
-    if (isConnected && !isProfileComplete) {
-      setShowProfileModal(true);
-    }
-  }, [isConnected, isProfileComplete]);
+  // Profile modal disabled for now
+  // useEffect(() => {
+  //   if (isConnected && !isProfileComplete) {
+  //     setShowProfileModal(true);
+  //   }
+  // }, [isConnected, isProfileComplete]);
 
   useEffect(() => {
     if (raceState === 'racing' || raceState === 'countdown') {

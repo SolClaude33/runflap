@@ -165,17 +165,15 @@ contract FlapRace {
         require(!race.finalized, "Race already finalized");
         require(block.timestamp >= race.raceEndTime, "Race not finished yet");
         
-        // Validate that the winner has bets (prevent manipulation)
-        require(carBetsAmount[raceId][winner] > 0, "Winner has no bets");
-        
         race.winner = winner;
         race.finalized = true;
         
         uint256 winnerPool = carBetsAmount[raceId][winner];
         uint256 loserPool = race.totalPool - winnerPool;
         
-        // Losers' bets are added to the next race pool
-        if (loserPool > 0) {
+        // If no one bet on the winner, keep the entire pool for the next race
+        if (winnerPool == 0) {
+            // No winners, entire pool moves to next race
             uint256 nextRaceId = raceId + 1;
             Race storage nextRace = races[nextRaceId];
             if (nextRace.startTime == 0) {
@@ -187,9 +185,27 @@ contract FlapRace {
                 nextRace.totalPool = 0;
                 nextRace.nextRacePool = 0;
             }
-            nextRace.nextRacePool += loserPool;
-            race.nextRacePool = loserPool;
-            emit NextRacePoolUpdated(nextRaceId, loserPool);
+            nextRace.nextRacePool += race.totalPool; // Entire pool moves forward
+            race.nextRacePool = race.totalPool;
+            emit NextRacePoolUpdated(nextRaceId, race.totalPool);
+        } else {
+            // Winners exist, losers' bets are added to the next race pool
+            if (loserPool > 0) {
+                uint256 nextRaceId = raceId + 1;
+                Race storage nextRace = races[nextRaceId];
+                if (nextRace.startTime == 0) {
+                    // Initialize next race
+                    nextRace.raceId = nextRaceId;
+                    nextRace.startTime = race.raceEndTime;
+                    nextRace.bettingEndTime = race.raceEndTime + BETTING_DURATION;
+                    nextRace.raceEndTime = nextRace.bettingEndTime + COUNTDOWN_DURATION + RACE_DURATION;
+                    nextRace.totalPool = 0;
+                    nextRace.nextRacePool = 0;
+                }
+                nextRace.nextRacePool += loserPool;
+                race.nextRacePool = loserPool;
+                emit NextRacePoolUpdated(nextRaceId, loserPool);
+            }
         }
         
         // Update next race start time

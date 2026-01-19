@@ -306,49 +306,49 @@ export default function RaceTrack({ raceState, countdown, onRaceEnd, raceId, rac
         // Speed changes every 0.3 seconds (roughly every 18 ticks at 60fps)
         // More frequent changes for more dynamic racing
         if (tick % 18 === index * 4) {
-          // Base variation: ±12% for more consistent but still exciting racing
-          const variation = 0.88 + rng() * 0.24;
+          // Base variation: ±25% for more dramatic racing (was ±12%)
+          const variation = 0.75 + rng() * 0.50;
           newTargetSpeed = racer.baseSpeed * variation;
           
-          // DRAMATIC EVENTS (8% chance each tick cycle)
+          // DRAMATIC EVENTS (15% chance each tick cycle, was 8%)
           const eventRoll = rng();
           
-          if (eventRoll < 0.04) {
-            // SURGE! Random racer gets massive boost
-            newTargetSpeed *= 1.20;
-          } else if (eventRoll < 0.08) {
-            // STUMBLE! Random slowdown
-            newTargetSpeed *= 0.80;
+          if (eventRoll < 0.075) {
+            // SURGE! Random racer gets massive boost (increased from 1.20 to 1.35)
+            newTargetSpeed *= 1.35;
+          } else if (eventRoll < 0.15) {
+            // STUMBLE! Random slowdown (increased from 0.80 to 0.70)
+            newTargetSpeed *= 0.70;
           }
           
-          // Rubber-banding: trailing racers get proportional boost
+          // Reduced rubber-banding: trailing racers get smaller boost (reduced from 12% to 6%)
           const distanceBehind = leaderDist - racerTotalDist;
           if (distanceBehind > 0 && position > 1) {
-            // Stronger boost for those further behind (up to 12%)
-            const catchUpBoost = Math.min(0.12, (distanceBehind / totalLength) * 0.18);
+            // Smaller boost for those further behind (reduced from 12% to 6%)
+            const catchUpBoost = Math.min(0.06, (distanceBehind / totalLength) * 0.10);
             newTargetSpeed *= (1 + catchUpBoost);
           }
           
-          // Leader penalty: slight drag when too far ahead
+          // Leader penalty: more drag when too far ahead (increased from 0.94 to 0.90)
           if (position === 1 && (leaderDist - lastPlaceDist) > totalLength * 0.15) {
-            newTargetSpeed *= 0.94;
+            newTargetSpeed *= 0.90;
           }
           
           // Drama moments at key race points
           const raceProgress = (racer.lap - 1 + racer.distance / totalLength) / TOTAL_LAPS;
           
-          // Final lap surge for non-leaders
+          // Final lap surge for non-leaders (increased from 1.10 to 1.15)
           if (racer.lap === TOTAL_LAPS && position > 1) {
-            newTargetSpeed *= 1.10 + rng() * 0.08;
+            newTargetSpeed *= 1.15 + rng() * 0.10;
           }
           
-          // Mid-race shakeup
+          // Mid-race shakeup (more dramatic)
           if (raceProgress > 0.45 && raceProgress < 0.55) {
-            newTargetSpeed *= 0.92 + rng() * 0.20;
+            newTargetSpeed *= 0.85 + rng() * 0.30;
           }
           
-          // Clamp speeds - balanced range for 30-second race
-          newTargetSpeed = Math.max(350, Math.min(550, newTargetSpeed));
+          // Clamp speeds - wider range for 30-second race (was 350-550, now 300-650)
+          newTargetSpeed = Math.max(300, Math.min(650, newTargetSpeed));
           newLastSpeedChange = raceTimeRef.current;
         }
         
@@ -366,13 +366,14 @@ export default function RaceTrack({ raceState, countdown, onRaceEnd, raceId, rac
         const timeRemaining = Math.max(0.1, RACE_DURATION_SECONDS - raceTimeRef.current);
         
         // Dynamic speed adjustment to ensure race completes in time
+        // Reduced blending to allow more natural variation (was 70/30, now 85/15)
         let adjustedSpeed = newSpeed;
         if (timeRemaining > 0 && distanceRemaining > 0) {
           const requiredSpeed = distanceRemaining / timeRemaining;
-          // Blend between current speed and required speed (70% current, 30% required)
-          adjustedSpeed = newSpeed * 0.7 + requiredSpeed * 0.3;
-          // Clamp to reasonable range
-          adjustedSpeed = Math.max(300, Math.min(600, adjustedSpeed));
+          // Blend between current speed and required speed (85% current, 15% required)
+          adjustedSpeed = newSpeed * 0.85 + requiredSpeed * 0.15;
+          // Clamp to reasonable range (wider range)
+          adjustedSpeed = Math.max(300, Math.min(650, adjustedSpeed));
         }
         
         let newDistance = racer.distance + adjustedSpeed * deltaTime;
