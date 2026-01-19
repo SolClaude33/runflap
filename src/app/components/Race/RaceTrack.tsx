@@ -189,7 +189,8 @@ export default function RaceTrack({ raceState, countdown, onRaceEnd, raceId, rac
       racersRef.current = resetRacers;
       setWinner(null);
       winnerFoundRef.current = false;
-      raceTimeRef.current = 0;
+      raceTimeRef.current = 0; // Will be set from contract time on first frame
+      tickCounterRef.current = 0; // Reset tick counter
       setRacersReady(true);
     }
   }, [raceState, totalLength, racersReady, raceId, raceSeed]);
@@ -257,29 +258,27 @@ export default function RaceTrack({ raceState, countdown, onRaceEnd, raceId, rac
     const animate = (currentTime: number) => {
       if (winnerFoundRef.current) return;
 
-      // Use smooth frame-based deltaTime for smooth animation
-      // Calculate deltaTime based on actual frame time, not contract time
-      const frameDelta = (currentTime - lastTimeRef.current) / 1000; // Convert to seconds
-      const deltaTime = Math.min(frameDelta, 0.033); // Cap at ~30fps minimum (0.033s)
-      
-      // Track total race time for synchronization checks
+      // CRITICAL: Use contract time as absolute source of truth for synchronization
+      // This ensures all clients see the same race progression
       const now = Math.floor(Date.now() / 1000);
       const actualRaceStartTime = raceStartTime > 0 ? raceStartTime : now;
       const contractRaceTime = Math.max(0, now - actualRaceStartTime);
       
-      // Update race time smoothly
-      if (raceTimeRef.current === 0) {
-        raceTimeRef.current = contractRaceTime;
-      } else {
-        // Smoothly update race time, but use frame delta for animation
-        raceTimeRef.current += deltaTime;
-      }
+      // Use contract time directly - this is the synchronized time for all clients
+      const previousRaceTime = raceTimeRef.current;
+      raceTimeRef.current = contractRaceTime;
+      
+      // Calculate deltaTime from contract time (not local frame time)
+      // This ensures all clients advance at the same rate
+      const deltaTime = Math.max(0, Math.min(contractRaceTime - previousRaceTime, 0.1)); // Cap at 100ms max per frame
       
       lastTimeRef.current = currentTime;
       
-      // Increment tick counter for deterministic RNG consumption
-      tickCounterRef.current += 1;
-      const tick = tickCounterRef.current;
+      // CRITICAL: Consume RNG based on synchronized contract time, not frame count
+      // Use time-based ticks (every 0.1 seconds) instead of frame-based ticks
+      // This ensures all clients consume RNG at the same rate regardless of FPS
+      const timeBasedTick = Math.floor(contractRaceTime * 10); // 10 ticks per second
+      const tick = timeBasedTick;
       const rng = rngRef.current;
 
       const currentRacers = racersRef.current;
@@ -303,9 +302,9 @@ export default function RaceTrack({ raceState, countdown, onRaceEnd, raceId, rac
         const racerTotalDist = (racer.lap - 1) * totalLength + racer.distance;
         const position = racerDistances.findIndex(r => r.id === racer.id) + 1;
         
-        // Speed changes every 0.3 seconds (roughly every 18 ticks at 60fps)
-        // More frequent changes for more dynamic racing
-        if (tick % 18 === index * 4) {
+        // Speed changes every 0.3 seconds (3 ticks at 10 ticks/second)
+        // Use time-based ticks for synchronization across all clients
+        if (tick % 3 === index) {
           // Base variation: ±25% for more dramatic racing (was ±12%)
           const variation = 0.75 + rng() * 0.50;
           newTargetSpeed = racer.baseSpeed * variation;
@@ -321,12 +320,23 @@ export default function RaceTrack({ raceState, countdown, onRaceEnd, raceId, rac
             newTargetSpeed *= 0.70;
           }
           
-          // Reduced rubber-banding: trailing racers get smaller boost (reduced from 12% to 6%)
+          // Reduced rubber-banding: trailing racers get smaller boost
+          // CRITICAL: Disable rubber-banding in final 5 seconds to increase separation at finish
           const distanceBehind = leaderDist - racerTotalDist;
-          if (distanceBehind > 0 && position > 1) {
-            // Smaller boost for those further behind (reduced from 12% to 6%)
+          const timeRemaining = RACE_DURATION_SECONDS - contractRaceTime;
+          const isFinalSeconds = timeRemaining <= 5;
+          
+          if (distanceBehind > 0 && position > 1 && !isFinalSeconds) {
+            // Smaller boost for those further behind (only if not in final seconds)
             const catchUpBoost = Math.min(0.06, (distanceBehind / totalLength) * 0.10);
             newTargetSpeed *= (1 + catchUpBoost);
+          }
+          
+          // In final seconds, reduce rubber-banding even more to create clear separation
+          if (isFinalSeconds && position > 1) {
+            // Minimal catch-up in final seconds (only 2% max)
+            const minimalCatchUp = Math.min(0.02, (distanceBehind / totalLength) * 0.05);
+            newTargetSpeed *= (1 + minimalCatchUp);
           }
           
           // Leader penalty: more drag when too far ahead (increased from 0.94 to 0.90)
@@ -360,20 +370,24 @@ export default function RaceTrack({ raceState, countdown, onRaceEnd, raceId, rac
         // Speed is in units per second, deltaTime is in seconds
         // Adjust speed based on race progress to ensure race completes in ~30 seconds
         const RACE_DURATION_SECONDS = 30;
-        const raceProgress = raceTimeRef.current / RACE_DURATION_SECONDS;
+        const raceProgress = contractRaceTime / RACE_DURATION_SECONDS;
         const totalDistanceNeeded = totalLength * TOTAL_LAPS;
         const distanceRemaining = totalDistanceNeeded - racerTotalDist;
-        const timeRemaining = Math.max(0.1, RACE_DURATION_SECONDS - raceTimeRef.current);
+        const timeRemaining = Math.max(0.1, RACE_DURATION_SECONDS - contractRaceTime);
         
         // Dynamic speed adjustment to ensure race completes in time
-        // Reduced blending to allow more natural variation (was 70/30, now 85/15)
+        // In final seconds, reduce speed adjustment to allow natural separation
+        const isFinalSeconds = timeRemaining <= 5;
         let adjustedSpeed = newSpeed;
-        if (timeRemaining > 0 && distanceRemaining > 0) {
+        if (timeRemaining > 0 && distanceRemaining > 0 && !isFinalSeconds) {
           const requiredSpeed = distanceRemaining / timeRemaining;
           // Blend between current speed and required speed (85% current, 15% required)
           adjustedSpeed = newSpeed * 0.85 + requiredSpeed * 0.15;
           // Clamp to reasonable range (wider range)
           adjustedSpeed = Math.max(300, Math.min(650, adjustedSpeed));
+        } else if (isFinalSeconds) {
+          // In final seconds, use natural speed with minimal adjustment to create clear separation
+          adjustedSpeed = newSpeed;
         }
         
         let newDistance = racer.distance + adjustedSpeed * deltaTime;
@@ -451,6 +465,7 @@ export default function RaceTrack({ raceState, countdown, onRaceEnd, raceId, rac
       }
 
       // Check if race time exceeded and determine winner by current position
+      // Use contractRaceTime (synchronized) instead of raceTimeRef
       const RACE_DURATION_SECONDS = 30;
       if (contractRaceTime >= RACE_DURATION_SECONDS && !winnerFoundRef.current) {
         // Calculate current positions after update
