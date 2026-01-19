@@ -416,28 +416,50 @@ export default function RacePage() {
     setLastWinner(winnerId);
     
     // Finalizar la carrera en el contrato automáticamente
-    // El endpoint verifica que la carrera realmente terminó antes de permitir la finalización
-    if (!testMode && raceNumber > 0) {
-      try {
-        const response = await fetch('/api/race/finalize', {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-          },
-          body: JSON.stringify({
-            raceId: raceNumber,
-            winner: winnerId,
-          }),
-        });
+    // Esperar a que el contrato realmente termine antes de intentar finalizar
+    if (!testMode && raceNumber > 0 && raceInfo) {
+      const raceEndTime = Number(raceInfo.raceEndTime);
+      const now = Math.floor(Date.now() / 1000);
+      const timeUntilEnd = raceEndTime - now;
+      
+      // Si la carrera aún no ha terminado en el contrato, esperar
+      const finalizeRace = async () => {
+        try {
+          const response = await fetch('/api/race/finalize', {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({
+              raceId: raceNumber,
+              winner: winnerId,
+            }),
+          });
 
-        const result = await response.json();
-        if (result.success) {
-          console.log(`Race ${raceNumber} finalized. Winner: ${winnerId}. TX: ${result.txHash}`);
-        } else {
-          console.error('Error finalizing race:', result.error);
+          const result = await response.json();
+          if (result.success) {
+            console.log(`Race ${raceNumber} finalized. Winner: ${winnerId}. TX: ${result.txHash}`);
+          } else {
+            // Si falla, intentar de nuevo después de un tiempo
+            if (result.error?.includes('not finished yet')) {
+              setTimeout(finalizeRace, 2000);
+            } else {
+              console.error('Error finalizing race:', result.error);
+            }
+          }
+        } catch (error) {
+          console.error('Failed to finalize race:', error);
+          // Reintentar después de un tiempo
+          setTimeout(finalizeRace, 2000);
         }
-      } catch (error) {
-        console.error('Failed to finalize race:', error);
+      };
+      
+      // Esperar hasta que el contrato termine (con un pequeño margen)
+      if (timeUntilEnd > 0) {
+        setTimeout(finalizeRace, (timeUntilEnd + 1) * 1000);
+      } else {
+        // Ya terminó, intentar inmediatamente
+        finalizeRace();
       }
     }
     
@@ -445,7 +467,7 @@ export default function RacePage() {
     setTimeout(() => {
       fetchRaceData();
     }, 2000);
-  }, [fetchRaceData, raceNumber, testMode]);
+  }, [fetchRaceData, raceNumber, testMode, raceInfo]);
 
   const handlePlaceBet = useCallback(async (carId: number, betAmount: string) => {
     if (testMode) {

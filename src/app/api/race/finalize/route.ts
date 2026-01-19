@@ -66,9 +66,10 @@ export async function POST(request: NextRequest) {
     // Verificar que la carrera ha terminado
     const raceEndTime = Number(raceInfo.raceEndTime);
     const now = Math.floor(Date.now() / 1000);
-    const raceHasEnded = now >= raceEndTime;
+    // Dar un margen de 2 segundos para sincronización (la carrera visual puede terminar un poco antes)
+    const raceHasEnded = now >= (raceEndTime - 2);
     
-    // Si no tiene API key válida, solo permitir si la carrera realmente terminó
+    // Si no tiene API key válida, solo permitir si la carrera realmente terminó (o está muy cerca)
     if (!hasValidApiKey && !raceHasEnded) {
       return NextResponse.json(
         { success: false, error: 'Unauthorized or race not finished yet' },
@@ -76,9 +77,10 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    if (!raceHasEnded) {
+    // Si la carrera aún no ha terminado (con margen), esperar
+    if (now < (raceEndTime - 2)) {
       return NextResponse.json(
-        { success: false, error: 'Race not finished yet' },
+        { success: false, error: `Race not finished yet. Ends at ${raceEndTime}, current time: ${now}` },
         { status: 400 }
       );
     }
