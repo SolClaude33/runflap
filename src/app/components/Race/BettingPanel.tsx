@@ -41,11 +41,11 @@ export default function BettingPanel({
   onAutoBetCharacterChange,
   betStats = [],
 }: BettingPanelProps) {
-  const { isConnected, balance, isProfileComplete } = useWeb3Context();
+  const { isConnected, balance } = useWeb3Context();
   const [selectedBetAmount, setSelectedBetAmount] = useState<string>('0.01');
 
   const handlePlaceBet = () => {
-    if (!isConnected || !isProfileComplete || !selectedCharacter || disabled) {
+    if (!isConnected || !selectedCharacter || disabled) {
       return;
     }
 
@@ -57,7 +57,7 @@ export default function BettingPanel({
     onPlaceBet(selectedCharacter, selectedBetAmount);
   };
 
-  const canBet = isConnected && isProfileComplete && selectedCharacter && parseFloat(selectedBetAmount) <= balance && !disabled;
+  const canBet = isConnected && selectedCharacter && parseFloat(selectedBetAmount) <= balance && !disabled;
 
   return (
     <div className="bg-[#1a4a2e] rounded-xl p-2 md:p-4 flex flex-col gap-2 md:gap-4 border-2 border-[#2d6b4a]">
@@ -111,7 +111,6 @@ export default function BettingPanel({
           `}
         >
           {!isConnected ? 'Connect Wallet' : 
-           !isProfileComplete ? 'Setup Profile' :
            !selectedCharacter ? 'Select Car' :
            parseFloat(selectedBetAmount) > balance ? 'Insufficient Balance' :
            disabled ? 'Betting Closed' :
