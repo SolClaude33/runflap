@@ -263,7 +263,22 @@ export default function RacePage() {
             if (contractSeed.generated && contractSeed.seed !== 0) {
               console.log(`[Race ${currentRace}] ✅ Using contract seed: ${contractSeed.seed}`);
             } else {
-              console.log(`[Race ${currentRace}] ⏳ Waiting for seed (will be generated when race starts)`);
+              console.log(`[Race ${currentRace}] ⏳ Seed not generated yet, triggering backend generation...`);
+              
+              // Trigger seed generation via backend API (no MetaMask popup)
+              // This replaces the need for a cron job
+              try {
+                const response = await fetch('/api/race/generate-seed');
+                const result = await response.json();
+                if (result.success) {
+                  console.log(`[Race ${currentRace}] ✅ Seed generation triggered:`, result.message);
+                } else {
+                  console.log(`[Race ${currentRace}] ℹ️ Seed generation:`, result.message || result.error);
+                }
+              } catch (error) {
+                // Silenciar errores - no es crítico si falla
+                console.log(`[Race ${currentRace}] ⚠️ Could not trigger seed generation (will retry):`, error);
+              }
             }
           } else {
             setRaceSeedData(null);
