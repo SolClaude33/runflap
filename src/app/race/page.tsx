@@ -242,53 +242,18 @@ export default function RacePage() {
       }
       
       // Obtener seed del contrato (CRÍTICO para sincronización)
-      // Solo intentar obtenerlo cuando las apuestas ya se cerraron
-      // CRITICAL: Seed generation logic
+      // IMPORTANT: Solo LEER el seed, NO generarlo aquí (el owner lo genera al finalizar)
+      // Esto evita que MetaMask pida transacciones a los usuarios
       if (info && Number(info.bettingEndTime) <= Math.floor(Date.now() / 1000)) {
         try {
-          // Step 1: Try to get the seed (view call, no gas)
-          let contractSeed = await callWithTimeout(
+          // Solo leer el seed (view call, sin gas, sin transacción)
+          const contractSeed = await callWithTimeout(
             getContractRaceSeed(provider, currentRace),
             5000,
             'Failed to get contract race seed'
           );
           
-          // Step 2: If seed is not generated yet, trigger generation (requires transaction)
-          if (contractSeed && !contractSeed.generated && account) {
-            // Only try to generate once per race to avoid spamming
-            const generateKey = `seed_gen_${currentRace}`;
-            const lastGenerateAttempt = sessionStorage.getItem(generateKey);
-            const now = Date.now();
-            
-            // Only attempt once every 30 seconds
-            if (!lastGenerateAttempt || now - parseInt(lastGenerateAttempt) > 30000) {
-              console.log(`[Race ${currentRace}] Seed not generated, attempting to generate...`);
-              sessionStorage.setItem(generateKey, now.toString());
-              
-              try {
-                const signer = await provider.getSigner();
-                const result = await generateRaceSeed(signer, currentRace);
-                
-                if (result.success) {
-                  console.log(`[Race ${currentRace}] Seed generation transaction sent: ${result.txHash}`);
-                  
-                  // Wait a bit and try to read again
-                  await new Promise(resolve => setTimeout(resolve, 2000));
-                  contractSeed = await callWithTimeout(
-                    getContractRaceSeed(provider, currentRace),
-                    5000,
-                    'Failed to get contract race seed after generation'
-                  );
-                } else {
-                  console.error(`[Race ${currentRace}] Failed to generate seed:`, result.error);
-                }
-              } catch (genError) {
-                console.error(`[Race ${currentRace}] Error generating seed:`, genError);
-              }
-            }
-          }
-          
-          // Step 3: Store the seed data
+          // Guardar el seed data
           if (contractSeed) {
             setRaceSeedData({
               seed: contractSeed.seed,
@@ -298,13 +263,13 @@ export default function RacePage() {
             if (contractSeed.generated && contractSeed.seed !== 0) {
               console.log(`[Race ${currentRace}] ✅ Using contract seed: ${contractSeed.seed}`);
             } else {
-              console.log(`[Race ${currentRace}] ⏳ Seed not available yet (waiting for generation)`);
+              console.log(`[Race ${currentRace}] ⏳ Waiting for seed (will be generated when race starts)`);
             }
           } else {
             setRaceSeedData(null);
           }
         } catch (error) {
-          console.error('Error in seed handling:', error);
+          // Silenciar errores de seed no disponible (es normal antes de que empiece la carrera)
           setRaceSeedData(null);
         }
       } else {

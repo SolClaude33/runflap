@@ -443,45 +443,36 @@ export default function RaceTrack({ raceState, countdown, onRaceEnd, raceId, rac
         let newDistance = racer.distance + adjustedSpeed * deltaTime;
         let newLap = racer.lap;
         
-        // Check for lap completion
-        if (newDistance >= totalLength && racer.lap < TOTAL_LAPS) {
+        // CRITICAL FIX: Prevent cars from going past 5 laps
+        // Check if racer is on FINAL lap (lap 5) and about to cross finish
+        if (racer.lap === TOTAL_LAPS && newDistance >= totalLength) {
+          // STOP at finish line, don't increment lap or reset distance
+          newDistance = totalLength;
+          newLap = TOTAL_LAPS;
+          
+          // Detect winner - first to cross on lap 5
+          if (!winnerFoundRef.current) {
+            winnerFoundRef.current = true;
+            raceWinner = {
+              ...racer,
+              distance: totalLength,
+              lap: TOTAL_LAPS,
+              finished: true,
+              finishTime: raceTimeRef.current,
+            };
+            return raceWinner;
+          }
+        }
+        // Check for lap completion (only for laps 1-4)
+        else if (newDistance >= totalLength && racer.lap < TOTAL_LAPS) {
           newLap = racer.lap + 1;
           newDistance = newDistance - totalLength;
         }
         
-        // Check for race finish - racer completes TOTAL_LAPS
-        if (newLap > TOTAL_LAPS && !winnerFoundRef.current) {
-          winnerFoundRef.current = true;
-          raceWinner = {
-            ...racer,
-            distance: totalLength, // Set to finish line
-            lap: TOTAL_LAPS,
-            finished: true,
-            finishTime: raceTimeRef.current,
-          };
-          return raceWinner;
-        }
-        
-        // Cap lap at TOTAL_LAPS and distance at totalLength on final lap
-        if (newLap >= TOTAL_LAPS) {
+        // Safety: Ensure lap never exceeds TOTAL_LAPS
+        if (newLap > TOTAL_LAPS) {
           newLap = TOTAL_LAPS;
-          if (newDistance >= totalLength) {
-            newDistance = totalLength; // Stop at finish line
-          }
-        }
-        
-        // Also check if racer is on final lap and crosses finish line
-        // IMPORTANT: Check BEFORE updating distance to catch the exact moment of crossing
-        if (racer.lap === TOTAL_LAPS && racer.distance < totalLength && newDistance >= totalLength && !winnerFoundRef.current) {
-          winnerFoundRef.current = true;
-          raceWinner = {
-            ...racer,
-            distance: totalLength,
-            lap: TOTAL_LAPS,
-            finished: true,
-            finishTime: raceTimeRef.current,
-          };
-          return raceWinner;
+          newDistance = totalLength;
         }
 
         // Calculate new angle for this frame

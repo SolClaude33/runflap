@@ -96,6 +96,21 @@ export async function POST(request: NextRequest) {
       );
     }
 
+    // CRITICAL: Generar seed ANTES de finalizar (si no está generado todavía)
+    // Esto asegura que el seed esté disponible para los clientes
+    if (!raceInfo.seedGenerated) {
+      console.log(`[Finalize API] Generating seed for race ${raceId} before finalizing...`);
+      try {
+        const seedTx = await contract.generateRaceSeed(raceId);
+        await seedTx.wait();
+        console.log(`[Finalize API] Seed generated for race ${raceId}`);
+      } catch (seedError: any) {
+        console.error(`[Finalize API] Error generating seed (will continue with finalization):`, seedError.message);
+        // Continuar con la finalización aunque falle el seed
+        // El contrato lo generará automáticamente en finalizeRace de todos modos
+      }
+    }
+
     // Finalizar la carrera
     const tx = await contract.finalizeRace(raceId, winner);
     const receipt = await tx.wait();
