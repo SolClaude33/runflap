@@ -850,10 +850,33 @@ export default function RacePage() {
             )}
           </div>
 
-          {lastWinner && raceState === 'finished' && (
-            <div className="bg-[#d4a517]/20 border-2 border-[#d4a517] rounded-xl p-2 text-center">
-              <div className="text-[#d4a517] text-xs">Winner</div>
-              <div className="font-bold">{getCarName(lastWinner)}</div>
+          {/* Winner Display - Visual and Contract */}
+          {raceState === 'finished' && (
+            <div className="space-y-2">
+              {lastWinner && (
+                <div className="bg-[#d4a517]/20 border-2 border-[#d4a517] rounded-xl p-2 text-center">
+                  <div className="text-[#d4a517] text-xs">Visual Winner</div>
+                  <div className="font-bold">{getCarName(lastWinner)}</div>
+                </div>
+              )}
+              {raceInfo?.finalized && raceInfo.winner > 0 && (
+                <div className="bg-[#22c55e]/20 border-2 border-[#22c55e] rounded-xl p-2 text-center">
+                  <div className="text-[#22c55e] text-xs">Contract Winner</div>
+                  <div className="font-bold">{getCarName(raceInfo.winner)}</div>
+                  {lastWinner && lastWinner !== raceInfo.winner && (
+                    <div className="text-red-400 text-xs mt-1">⚠️ Mismatch detected</div>
+                  )}
+                  {lastWinner && lastWinner === raceInfo.winner && (
+                    <div className="text-green-400 text-xs mt-1">✅ Match</div>
+                  )}
+                </div>
+              )}
+              {raceState === 'finished' && !raceInfo?.finalized && (
+                <div className="bg-[#f59e0b]/20 border-2 border-[#f59e0b] rounded-xl p-2 text-center">
+                  <div className="text-[#f59e0b] text-xs">Status</div>
+                  <div className="text-sm">⏳ Not finalized yet</div>
+                </div>
+              )}
             </div>
           )}
         </section>
@@ -911,10 +934,22 @@ export default function RacePage() {
                 <div className="flex items-center gap-2 md:gap-4">
                   <div className="text-[#d4a517] text-sm md:text-xl font-bold tracking-wider">RACE FINISHED!</div>
                 </div>
-                <div className="flex items-center gap-2">
-                  <div className="bg-[#d4a517]/20 border-2 border-[#d4a517] rounded-xl px-4 md:px-6 py-1 md:py-2">
-                    <span className="text-white text-sm md:text-lg font-bold">Next race soon...</span>
-                  </div>
+                <div className="flex items-center gap-2 flex-wrap">
+                  {lastWinner && (
+                    <div className="bg-[#d4a517]/20 border-2 border-[#d4a517] rounded-xl px-3 md:px-4 py-1 md:py-2">
+                      <span className="text-[#d4a517] text-xs md:text-sm font-semibold">Visual: {getCarName(lastWinner)}</span>
+                    </div>
+                  )}
+                  {raceInfo?.finalized && raceInfo.winner > 0 && (
+                    <div className={`${lastWinner === raceInfo.winner ? 'bg-[#22c55e]/20 border-[#22c55e]' : 'bg-[#22c55e]/20 border-[#22c55e]'} border-2 rounded-xl px-3 md:px-4 py-1 md:py-2`}>
+                      <span className="text-[#22c55e] text-xs md:text-sm font-semibold">Contract: {getCarName(raceInfo.winner)}</span>
+                    </div>
+                  )}
+                  {!raceInfo?.finalized && (
+                    <div className="bg-[#f59e0b]/20 border-2 border-[#f59e0b] rounded-xl px-3 md:px-4 py-1 md:py-2">
+                      <span className="text-[#f59e0b] text-xs md:text-sm font-semibold">Not finalized</span>
+                    </div>
+                  )}
                 </div>
               </>
             )}
