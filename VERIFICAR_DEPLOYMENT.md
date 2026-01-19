@@ -144,3 +144,11 @@ En lugar de:
 ---
 
 **NOTA IMPORTANTE**: Los cron jobs de Vercel SOLO funcionan en producción. Si estás probando en `localhost` o en un deployment de preview, el cron job NO se ejecutará.
+
+---
+
+## Troubleshooting
+
+Si Vercel no detecta los cambios automáticamente:
+1. Ve a Settings → Git → Reconnect repository
+2. O fuerza un nuevo commit y push
