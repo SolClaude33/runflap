@@ -668,15 +668,26 @@ export default function RacePage() {
               <FaFlask /> {testMode ? 'Exit Test Mode' : 'Test Mode'}
             </button>
             {isOwner && (
-              <button 
-                onClick={() => {
-                  setShowWithdrawModal(true);
-                  setShowMenu(false);
-                }}
-                className="w-full text-left py-2 px-3 rounded-lg flex items-center gap-2 transition-colors hover:bg-[#1a4a2e] text-[#d4a517]"
-              >
-                💰 Withdraw Funds
-              </button>
+              <>
+                <button 
+                  onClick={() => {
+                    setShowWithdrawModal(true);
+                    setShowMenu(false);
+                  }}
+                  className="w-full text-left py-2 px-3 rounded-lg flex items-center gap-2 transition-colors hover:bg-[#1a4a2e] text-[#d4a517]"
+                >
+                  💰 Withdraw Funds
+                </button>
+                <button 
+                  onClick={() => {
+                    setShowFinalizeModal(true);
+                    setShowMenu(false);
+                  }}
+                  className="w-full text-left py-2 px-3 rounded-lg flex items-center gap-2 transition-colors hover:bg-[#1a4a2e] text-[#d4a517]"
+                >
+                  🏁 Finalize Race
+                </button>
+              </>
             )}
           </div>
         </div>
@@ -1004,6 +1015,92 @@ export default function RacePage() {
         isOpen={showHelpModal}
         onClose={() => setShowHelpModal(false)}
       />
+
+      {/* Finalize Race Modal (Owner Only) */}
+      {showFinalizeModal && isOwner && (
+        <div className="fixed inset-0 z-50 bg-black/80 flex items-center justify-center p-4" onClick={() => setShowFinalizeModal(false)}>
+          <div 
+            className="bg-[#1a4a2e] border-2 border-[#d4a517] rounded-xl p-6 max-w-md w-full"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex justify-between items-center mb-4">
+              <h3 className="text-white font-bold text-xl">Finalize Race</h3>
+              <button 
+                onClick={() => setShowFinalizeModal(false)}
+                className="text-white/60 hover:text-white text-2xl"
+              >
+                &times;
+              </button>
+            </div>
+            
+            <div className="mb-4">
+              <label className="block text-[#7cb894] text-sm mb-2">Race ID</label>
+              <input
+                type="number"
+                value={finalizeRaceId}
+                onChange={(e) => setFinalizeRaceId(e.target.value)}
+                placeholder="Enter race ID (e.g., 0, 1, 2...)"
+                className="w-full p-2 rounded-lg bg-[#0d3320] border border-[#2d6b4a] text-white"
+              />
+            </div>
+
+            <div className="mb-4">
+              <label className="block text-[#7cb894] text-sm mb-2">Winner (Car ID: 1-4)</label>
+              <input
+                type="number"
+                min="1"
+                max="4"
+                value={finalizeWinner}
+                onChange={(e) => setFinalizeWinner(parseInt(e.target.value) || 1)}
+                className="w-full p-2 rounded-lg bg-[#0d3320] border border-[#2d6b4a] text-white"
+              />
+            </div>
+
+            <button
+              onClick={async () => {
+                if (!finalizeRaceId || !finalizeWinner || finalizeWinner < 1 || finalizeWinner > 4) {
+                  toast.error('Please enter valid race ID and winner (1-4)');
+                  return;
+                }
+                try {
+                  toast.loading('Finalizing race...', { id: 'finalize' });
+                  const response = await fetch('/api/race/finalize', {
+                    method: 'POST',
+                    headers: {
+                      'Content-Type': 'application/json',
+                      'x-api-key': process.env.NEXT_PUBLIC_API_KEY || '',
+                    },
+                    body: JSON.stringify({
+                      raceId: parseInt(finalizeRaceId),
+                      winner: finalizeWinner,
+                    }),
+                  });
+                  const result = await response.json();
+                  if (result.success) {
+                    toast.success(`Race ${finalizeRaceId} finalized! Winner: Car ${finalizeWinner}`, { id: 'finalize' });
+                    setShowFinalizeModal(false);
+                    setFinalizeRaceId('');
+                    setFinalizeWinner(1);
+                    setTimeout(() => fetchRaceData(), 2000);
+                  } else {
+                    toast.error(result.error || 'Error finalizing race', { id: 'finalize' });
+                  }
+                } catch (error: any) {
+                  toast.error(error.message || 'Error finalizing race', { id: 'finalize' });
+                }
+              }}
+              className="w-full bg-[#d4a517] hover:bg-[#b8920f] text-black px-4 py-3 rounded-lg font-bold"
+            >
+              Finalize Race
+            </button>
+
+            <div className="mt-4 text-xs text-[#7cb894]">
+              <p>⚠️ Only finalize races that have already ended</p>
+              <p>This will distribute winnings and move loser funds to next race</p>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Withdraw Modal (Owner Only) */}
       {showWithdrawModal && isOwner && (

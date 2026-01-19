@@ -69,7 +69,8 @@ export async function POST(request: NextRequest) {
     // Dar un margen de 2 segundos para sincronización (la carrera visual puede terminar un poco antes)
     const raceHasEnded = now >= (raceEndTime - 2);
     
-    // Si no tiene API key válida, solo permitir si la carrera realmente terminó (o está muy cerca)
+    // Si tiene API key válida (owner), puede finalizar cualquier carrera pasada
+    // Si no tiene API key, solo permitir si la carrera realmente terminó (o está muy cerca)
     if (!hasValidApiKey && !raceHasEnded) {
       return NextResponse.json(
         { success: false, error: 'Unauthorized or race not finished yet' },
@@ -77,10 +78,19 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // Si la carrera aún no ha terminado (con margen), esperar
-    if (now < (raceEndTime - 2)) {
+    // Si no tiene API key y la carrera aún no ha terminado (con margen), rechazar
+    // Si tiene API key, puede finalizar incluso si el tiempo exacto no ha pasado (para carreras pasadas)
+    if (!hasValidApiKey && now < (raceEndTime - 2)) {
       return NextResponse.json(
         { success: false, error: `Race not finished yet. Ends at ${raceEndTime}, current time: ${now}` },
+        { status: 400 }
+      );
+    }
+    
+    // Si tiene API key pero la carrera aún no ha terminado (futuro), rechazar por seguridad
+    if (hasValidApiKey && now < raceEndTime) {
+      return NextResponse.json(
+        { success: false, error: `Cannot finalize future race. Race ends at ${raceEndTime}, current time: ${now}` },
         { status: 400 }
       );
     }
