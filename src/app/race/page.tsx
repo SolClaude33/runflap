@@ -72,6 +72,7 @@ export default function RacePage() {
   const [bettingTimer, setBettingTimer] = useState(BETTING_TIME);
   const [preCountdown, setPreCountdown] = useState<number | null>(null);
   const finalizingRaceRef = useRef<Set<number>>(new Set()); // Track races being finalized to prevent duplicates
+  const winnerDetectedRef = useRef<Map<number, number>>(new Map()); // Track detected winner per race to ensure consistency
   
   // Guardar timestamps del contrato para countdown local suave
   const contractTimestampsRef = useRef<{
@@ -123,6 +124,13 @@ export default function RacePage() {
       let currentRace: number;
       try {
         currentRace = await callWithTimeout(getCurrentRaceId(provider), 5000, 'Failed to get race ID');
+        
+        // CRITICAL: Clear winner detection when race changes
+        if (currentRace !== raceNumber) {
+          winnerDetectedRef.current.delete(raceNumber); // Clear old race
+          finalizingRaceRef.current.delete(raceNumber); // Clear old race finalization
+        }
+        
         setRaceNumber(currentRace);
       } catch (error: any) {
         // Si falla obtener el race ID, no continuar
@@ -417,6 +425,20 @@ export default function RacePage() {
   }, [signer, isOwner, provider]);
 
   const handleRaceEnd = useCallback(async (winnerId: number) => {
+    // CRITICAL: Store the first detected winner for this race
+    // If a different winner is detected later, log a warning but use the first one
+    if (!winnerDetectedRef.current.has(raceNumber)) {
+      winnerDetectedRef.current.set(raceNumber, winnerId);
+      console.log(`[Race ${raceNumber}] First winner detected: Car ${winnerId}`);
+    } else {
+      const firstWinner = winnerDetectedRef.current.get(raceNumber);
+      if (firstWinner !== winnerId) {
+        console.warn(`[Race ${raceNumber}] Winner mismatch! First detected: Car ${firstWinner}, New: Car ${winnerId}. Using first winner.`);
+        // Use the first detected winner to ensure consistency
+        return; // Don't proceed with different winner
+      }
+    }
+    
     setRaceState('finished');
     setLastWinner(winnerId);
     
@@ -430,6 +452,10 @@ export default function RacePage() {
       }
 
       finalizingRaceRef.current.add(raceNumber);
+      
+      // Use the stored winner (first detected) to ensure consistency
+      const finalWinner = winnerDetectedRef.current.get(raceNumber) || winnerId;
+      console.log(`[Race ${raceNumber}] Finalizing with winner: Car ${finalWinner}`);
 
       const raceEndTime = Number(raceInfo.raceEndTime);
       const now = Math.floor(Date.now() / 1000);
@@ -445,15 +471,17 @@ export default function RacePage() {
             },
             body: JSON.stringify({
               raceId: raceNumber,
-              winner: winnerId,
+              winner: finalWinner, // Use stored winner for consistency
             }),
           });
 
           const result = await response.json();
           if (result.success) {
-            console.log(`Race ${raceNumber} finalized. Winner: ${winnerId}. TX: ${result.txHash}`);
+            console.log(`Race ${raceNumber} finalized. Winner: Car ${finalWinner}. TX: ${result.txHash}`);
             // Remove from set after successful finalization
             finalizingRaceRef.current.delete(raceNumber);
+            // Clear winner detection for this race
+            winnerDetectedRef.current.delete(raceNumber);
           } else {
             // Remove from set if error indicates race is already finalized
             if (result.error?.includes('already finalized')) {
