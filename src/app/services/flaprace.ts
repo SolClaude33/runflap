@@ -1132,45 +1132,79 @@ export const getRaceSeed = async (
   totalBets: number
 ): Promise<{ seed: number; blockHash: string }> => {
   try {
-    // Obtener el bloque que se minó cuando se cerraron las apuestas
+    // CRITICAL: Use deterministic block selection for all clients
+    // Calculate expected block number based on bettingEndTime
+    // BSC has ~3 seconds per block, so we can estimate the block number
     const currentBlock = await provider.getBlockNumber();
+    const currentBlockData = await provider.getBlock(currentBlock);
+    if (!currentBlockData) {
+      throw new Error('Could not get current block');
+    }
+    
+    // Calculate time difference and estimate block number
+    const timeDiff = currentBlockData.timestamp - bettingEndTime;
+    const estimatedBlocksAgo = Math.floor(timeDiff / 3); // ~3 seconds per block on BSC
+    const targetBlockNumber = Math.max(0, currentBlock - estimatedBlocksAgo);
+    
+    // Get the block at the estimated position
+    // This ensures all clients get the same block (or very close)
     let targetBlock = currentBlock;
+    let blockHash = '';
     
-    // Buscar el bloque más cercano al bettingEndTime
-    // BSC tiene ~3 segundos por bloque
-    const blocksToCheck = Math.min(100, Math.floor((Date.now() / 1000 - bettingEndTime) / 3));
-    
-    for (let i = 0; i < blocksToCheck; i++) {
-      const block = await provider.getBlock(currentBlock - i);
+    // Try to get the exact block, or the closest one before bettingEndTime
+    try {
+      const block = await provider.getBlock(targetBlockNumber);
       if (block && block.timestamp <= bettingEndTime) {
         targetBlock = block.number;
-        break;
+        blockHash = block.hash || '';
+      } else {
+        // If estimated block is after bettingEndTime, search backwards
+        for (let i = 0; i < 20; i++) {
+          const checkBlock = await provider.getBlock(targetBlockNumber - i);
+          if (checkBlock && checkBlock.timestamp <= bettingEndTime) {
+            targetBlock = checkBlock.number;
+            blockHash = checkBlock.hash || '';
+            break;
+          }
+        }
+      }
+    } catch {
+      // Fallback: use current block if we can't find the target
+      const block = await provider.getBlock(currentBlock);
+      if (block && block.hash) {
+        blockHash = block.hash;
       }
     }
     
-    // Obtener el hash del bloque
-    const block = await provider.getBlock(targetBlock);
+    // CRITICAL: Convert blockHash to number using same method as RaceTrack
+    // This ensures exact same conversion for all clients
     let blockHashValue = 0;
-    let blockHash = '';
-    
-    if (block && block.hash) {
-      blockHash = block.hash;
-      // Convertir hash a número (tomar primeros 8 bytes)
-      const hashString = block.hash.slice(2); // Remover '0x'
+    if (blockHash) {
+      const hashString = blockHash.slice(2); // Remover '0x'
       const seedString = hashString.slice(0, 16); // Primeros 16 caracteres (8 bytes)
-      blockHashValue = parseInt(seedString, 16);
+      try {
+        // Use BigInt for precision, then convert to Number
+        blockHashValue = Number(BigInt('0x' + seedString) & BigInt(0xFFFFFFFF));
+      } catch {
+        // Fallback to parseInt if BigInt fails
+        blockHashValue = parseInt(seedString, 16) & 0xFFFFFFFF;
+      }
     }
     
-    // Combinar múltiples factores para crear un seed impredecible
-    // Usar XOR para combinar los valores
+    // CRITICAL: Combine factors in exact same order as RaceTrack
+    // Order: raceId, bettingEndTime, blockHashValue, totalBets
     const seed = raceId ^ bettingEndTime ^ blockHashValue ^ totalBets;
     
-    return { seed, blockHash };
+    // CRITICAL: Normalize to 32-bit unsigned integer for consistent PRNG
+    const normalizedSeed = (seed >>> 0);
+    
+    return { seed: normalizedSeed, blockHash };
   } catch (error) {
     console.error('Error getting race seed:', error);
     // Fallback: usar combinación simple si falla
+    const fallbackSeed = (raceId ^ bettingEndTime ^ totalBets) >>> 0;
     return { 
-      seed: raceId ^ bettingEndTime ^ totalBets,
+      seed: fallbackSeed,
       blockHash: ''
     };
   }

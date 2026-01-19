@@ -168,22 +168,36 @@ export default function RaceTrack({ raceState, countdown, onRaceEnd, raceId, rac
       // 4. totalBets (cantidad de apuestas, impredecible antes de cerrar)
       // Esto hace que sea prácticamente imposible predecir el resultado antes de que se cierren las apuestas
       
-      // Convertir blockHash a número si existe
+      // CRITICAL: Calculate seed deterministically for all clients
+      // Convert blockHash to number using a more robust method
       let blockHashValue = 0;
       if (raceSeed && raceSeed.blockHash) {
         const hashString = raceSeed.blockHash.slice(2); // Remover '0x'
-        const seedString = hashString.slice(0, 16); // Primeros 16 caracteres (8 bytes)
-        blockHashValue = parseInt(seedString, 16);
+        // Use first 16 characters (8 bytes) for consistency
+        const seedString = hashString.slice(0, 16);
+        // Use BigInt for precision, then convert to Number
+        // This ensures exact same conversion for all clients
+        try {
+          blockHashValue = Number(BigInt('0x' + seedString) & BigInt(0xFFFFFFFF));
+        } catch {
+          // Fallback to parseInt if BigInt fails
+          blockHashValue = parseInt(seedString, 16) & 0xFFFFFFFF;
+        }
       }
       
-      // Combinar todos los factores con XOR, usar fallback si raceSeed es null
+      // CRITICAL: Combine factors in exact same order for all clients
+      // Use XOR which is commutative and associative, ensuring same result
+      // Order: raceId, bettingEndTime, blockHashValue, totalBets
       const seed = raceSeed 
         ? (raceSeed.raceId ^ raceSeed.bettingEndTime ^ blockHashValue ^ raceSeed.totalBets)
         : (raceId ^ Math.floor(Date.now() / 1000));
-      seedRef.current = seed;
-      rngRef.current = createPRNG(seed);
+      
+      // CRITICAL: Ensure seed is a 32-bit integer for consistent PRNG
+      const normalizedSeed = (seed >>> 0); // Convert to unsigned 32-bit integer
+      seedRef.current = normalizedSeed;
+      rngRef.current = createPRNG(normalizedSeed);
       tickCounterRef.current = 0;
-      setDisplaySeed(`${seed.toString(36).toUpperCase()}`);
+      setDisplaySeed(`${normalizedSeed.toString(36).toUpperCase()}`);
       const resetRacers = createInitialRacers(seed);
       setRacers(resetRacers);
       racersRef.current = resetRacers;
@@ -308,16 +322,19 @@ export default function RaceTrack({ raceState, countdown, onRaceEnd, raceId, rac
       // CRITICAL: Consume RNG based on synchronized contract time, not frame count
       // Use time-based ticks (every 0.1 seconds) instead of frame-based ticks
       // This ensures all clients consume RNG at the same rate regardless of FPS
+      // CRITICAL: Use Math.floor to ensure exact same tick calculation for all clients
       const timeBasedTick = Math.floor(contractRaceTime * 10); // 10 ticks per second
       
       // CRITICAL: If we're behind on RNG consumption (e.g., client connected late),
       // catch up by consuming RNG for all missed ticks
       // This ensures all clients have the same RNG state at any given contract time
+      // IMPORTANT: Always consume RNG in the same order, even if we're catching up
       while (tickCounterRef.current < timeBasedTick) {
-        rngRef.current(); // Consume RNG to catch up
+        rngRef.current(); // Consume RNG to catch up - MUST be in exact same order
         tickCounterRef.current++;
       }
       
+      // CRITICAL: Use the synchronized tick, not a local counter
       const tick = timeBasedTick;
       const rng = rngRef.current;
 
