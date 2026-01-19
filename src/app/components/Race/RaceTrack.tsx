@@ -58,9 +58,9 @@ const createInitialRacers = (seed: number = 0): Racer[] => {
     { id: 4, name: 'Wojack', image: '/race/racer4.png', color: '#e5e5e5', carColor: '#a3a3a3' },
   ].map((r) => {
     // Base speed calculated to complete 5 laps in ~30 seconds
-    // Assuming circuit length ~2000 units: 5 laps = 10,000 units / 30s = ~333 units/sec
-    // Using higher base speed for more dynamic racing, but will be adjusted by time constraint
-    const baseSpeed = 400; // Balanced speed for 30-second race
+    // Circuit length ~1966 units: 5 laps = 9830 units / 30s = ~328 units/sec average
+    // Using higher base speed (450) to ensure race completes in time with variations
+    const baseSpeed = 450; // Increased from 400 to ensure race completes
     return {
       ...r,
       distance: 0,
