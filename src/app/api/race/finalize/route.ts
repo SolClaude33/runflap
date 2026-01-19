@@ -11,10 +11,8 @@ const FLAPRACE_ABI = [
 
 // Esta clave privada debe estar en variables de entorno y ser del owner del contrato
 const OWNER_PRIVATE_KEY = process.env.OWNER_PRIVATE_KEY || '';
-const CONTRACT_ADDRESS = process.env.NEXT_PUBLIC_CONTRACT_ADDRESS || '';
-const RPC_URL = process.env.NEXT_PUBLIC_NETWORK === 'mainnet' 
-  ? 'https://bsc-dataseed1.binance.org/'
-  : 'https://data-seed-prebsc-1-s1.binance.org:8545/';
+const CONTRACT_ADDRESS = process.env.NEXT_PUBLIC_FLAPRACE_ADDRESS || '';
+const RPC_URL = process.env.NEXT_PUBLIC_RPC_URL || 'https://bsc-testnet.public.blastapi.io';
 
 // API Key para autenticación (debe estar en variables de entorno)
 const API_KEY = process.env.API_KEY || '';
