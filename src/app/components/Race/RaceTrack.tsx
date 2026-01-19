@@ -901,8 +901,8 @@ export default function RaceTrack({ raceState, countdown, onRaceEnd, raceId, rac
         })}
       </svg>
 
-      {/* Race countdown overlay */}
-      {countdown !== null && countdown > 0 && (
+      {/* Race countdown overlay - only show during countdown phase, not during racing */}
+      {raceState === 'countdown' && countdown !== null && countdown > 0 && (
         <div className="absolute inset-0 flex items-center justify-center bg-black/50">
           <div className="text-8xl font-bold text-white animate-pulse">
             {countdown}
@@ -910,7 +910,7 @@ export default function RaceTrack({ raceState, countdown, onRaceEnd, raceId, rac
         </div>
       )}
 
-      {countdown === 0 && raceState === 'countdown' && (
+      {raceState === 'countdown' && countdown === 0 && (
         <div className="absolute inset-0 flex items-center justify-center bg-black/50">
           <div className="text-8xl font-bold text-green-400 animate-pulse">
             GO!

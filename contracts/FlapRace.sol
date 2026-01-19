@@ -121,8 +121,10 @@ contract FlapRace {
             race.startTime = actualStartTime;
             race.bettingEndTime = actualStartTime + BETTING_DURATION;
             race.raceEndTime = race.bettingEndTime + COUNTDOWN_DURATION + RACE_DURATION;
-            race.totalPool = 0;
-            race.nextRacePool = 0;
+            // IMPORTANT: When initializing a new race, if there's a nextRacePool from previous race,
+            // add it to totalPool so it's included in the prize pool
+            race.totalPool = race.nextRacePool; // Include pool from previous race
+            race.nextRacePool = 0; // Reset nextRacePool since it's now in totalPool
             emit RaceStarted(raceId, race.startTime);
         }
         

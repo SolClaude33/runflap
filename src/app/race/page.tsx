@@ -71,6 +71,8 @@ export default function RacePage() {
   const [showMobileBets, setShowMobileBets] = useState(false);
   const [bettingTimer, setBettingTimer] = useState(BETTING_TIME);
   const [preCountdown, setPreCountdown] = useState<number | null>(null);
+  const finalizingRaceRef = useRef<Set<number>>(new Set()); // Track races being finalized to prevent duplicates
+  
   // Guardar timestamps del contrato para countdown local suave
   const contractTimestampsRef = useRef<{
     bettingEndTime: number | null;
@@ -421,6 +423,14 @@ export default function RacePage() {
     // Finalizar la carrera en el contrato automáticamente
     // Esperar a que el contrato realmente termine antes de intentar finalizar
     if (!testMode && raceNumber > 0 && raceInfo) {
+      // Prevent duplicate finalization attempts
+      if (finalizingRaceRef.current.has(raceNumber)) {
+        console.log(`Race ${raceNumber} already being finalized, skipping...`);
+        return;
+      }
+
+      finalizingRaceRef.current.add(raceNumber);
+
       const raceEndTime = Number(raceInfo.raceEndTime);
       const now = Math.floor(Date.now() / 1000);
       const timeUntilEnd = raceEndTime - now;
@@ -442,18 +452,33 @@ export default function RacePage() {
           const result = await response.json();
           if (result.success) {
             console.log(`Race ${raceNumber} finalized. Winner: ${winnerId}. TX: ${result.txHash}`);
+            // Remove from set after successful finalization
+            finalizingRaceRef.current.delete(raceNumber);
           } else {
-            // Si falla, intentar de nuevo después de un tiempo
-            if (result.error?.includes('not finished yet')) {
-              setTimeout(finalizeRace, 2000);
+            // Remove from set if error indicates race is already finalized
+            if (result.error?.includes('already finalized')) {
+              finalizingRaceRef.current.delete(raceNumber);
+              console.log(`Race ${raceNumber} was already finalized`);
+            } else if (result.error?.includes('not finished yet')) {
+              // Retry after a delay
+              setTimeout(() => {
+                finalizingRaceRef.current.delete(raceNumber);
+                finalizeRace();
+              }, 2000);
             } else {
               console.error('Error finalizing race:', result.error);
+              finalizingRaceRef.current.delete(raceNumber);
             }
           }
         } catch (error) {
           console.error('Failed to finalize race:', error);
-          // Reintentar después de un tiempo
-          setTimeout(finalizeRace, 2000);
+          // Remove from set on error and retry after a delay
+          finalizingRaceRef.current.delete(raceNumber);
+          setTimeout(() => {
+            if (!finalizingRaceRef.current.has(raceNumber)) {
+              finalizeRace();
+            }
+          }, 2000);
         }
       };
       
