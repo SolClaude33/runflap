@@ -786,6 +786,14 @@ export default function RacePage() {
 
           <JackpotPanel />
 
+          {/* Previous Race Winner Display */}
+          {previousRaceInfo && previousRaceInfo.finalized && previousRaceInfo.winner > 0 && raceState === 'betting' && (
+            <div className="bg-[#1a4a2e]/50 border border-[#2d6b4a] rounded-xl p-3 text-center">
+              <div className="text-[#7cb894] text-xs mb-1">Previous Race #{raceNumber - 1}</div>
+              <div className="text-[#22c55e] text-sm font-semibold">Winner: {getCarName(previousRaceInfo.winner)}</div>
+            </div>
+          )}
+
           <div className="flex items-center gap-2 bg-[#0d3320] rounded-full w-fit p-1">
             <button 
               onClick={() => setBetTab('bets')}
