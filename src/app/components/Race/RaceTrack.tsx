@@ -157,7 +157,8 @@ export default function RaceTrack({ raceState, countdown, onRaceEnd, raceId, rac
   };
 
   useEffect(() => {
-    if ((raceState === 'countdown' || raceState === 'racing') && totalLength > 0 && !racersReady && raceId > 0 && raceSeed) {
+    // Initialize racers even if raceSeed is null (use fallback seed)
+    if ((raceState === 'countdown' || raceState === 'racing') && totalLength > 0 && !racersReady && raceId >= 0) {
       // Generar seed impredecible combinando múltiples factores:
       // 1. raceId (para sincronización)
       // 2. bettingEndTime (timestamp cuando se cerraron apuestas)
@@ -167,14 +168,16 @@ export default function RaceTrack({ raceState, countdown, onRaceEnd, raceId, rac
       
       // Convertir blockHash a número si existe
       let blockHashValue = 0;
-      if (raceSeed.blockHash) {
+      if (raceSeed && raceSeed.blockHash) {
         const hashString = raceSeed.blockHash.slice(2); // Remover '0x'
         const seedString = hashString.slice(0, 16); // Primeros 16 caracteres (8 bytes)
         blockHashValue = parseInt(seedString, 16);
       }
       
-      // Combinar todos los factores con XOR
-      const seed = raceSeed.raceId ^ raceSeed.bettingEndTime ^ blockHashValue ^ raceSeed.totalBets;
+      // Combinar todos los factores con XOR, usar fallback si raceSeed es null
+      const seed = raceSeed 
+        ? (raceSeed.raceId ^ raceSeed.bettingEndTime ^ blockHashValue ^ raceSeed.totalBets)
+        : (raceId ^ Math.floor(Date.now() / 1000));
       seedRef.current = seed;
       rngRef.current = createPRNG(seed);
       tickCounterRef.current = 0;
@@ -233,7 +236,8 @@ export default function RaceTrack({ raceState, countdown, onRaceEnd, raceId, rac
   }, [raceState, winner]);
 
   useEffect(() => {
-    if (raceState !== 'racing' || totalLength === 0 || !racersReady || raceStartTime === 0) {
+    // Allow animation to start even if raceStartTime is 0 (use current time as fallback)
+    if (raceState !== 'racing' || totalLength === 0 || !racersReady) {
       if (animationRef.current) {
         cancelAnimationFrame(animationRef.current);
         animationRef.current = null;
@@ -252,8 +256,10 @@ export default function RaceTrack({ raceState, countdown, onRaceEnd, raceId, rac
       if (winnerFoundRef.current) return;
 
       // Calcular tiempo de carrera basado en el tiempo del contrato (sincronización global)
+      // Si raceStartTime es 0, usar el tiempo actual como referencia
       const now = Math.floor(Date.now() / 1000);
-      const contractRaceTime = Math.max(0, now - raceStartTime);
+      const actualRaceStartTime = raceStartTime > 0 ? raceStartTime : now;
+      const contractRaceTime = Math.max(0, now - actualRaceStartTime);
       
       // Calcular deltaTime basado en el tiempo del contrato, no en tiempo local
       // Esto asegura que todos los dispositivos vean la misma carrera

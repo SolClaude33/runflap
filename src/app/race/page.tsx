@@ -24,6 +24,10 @@ import {
   getValidBetAmounts,
   getRaceStats,
   getRaceSeed,
+  getContractOwner,
+  getContractBalance,
+  withdraw,
+  emergencyWithdraw,
   type RaceInfo,
   type Bet,
   type CarStats,
@@ -68,6 +72,9 @@ export default function RacePage() {
   const [bettingTimer, setBettingTimer] = useState(BETTING_TIME);
   const [preCountdown, setPreCountdown] = useState<number | null>(null);
   const [validBetAmounts, setValidBetAmounts] = useState<string[]>(['0.01', '0.05', '0.1', '0.5']);
+  const [isOwner, setIsOwner] = useState(false);
+  const [contractBalance, setContractBalance] = useState<bigint>(BigInt(0));
+  const [showWithdrawModal, setShowWithdrawModal] = useState(false);
   
   const videoRef = useRef<HTMLVideoElement>(null);
 
@@ -268,6 +275,86 @@ export default function RacePage() {
     
     fetchValidBetAmounts();
   }, [provider]);
+
+  // Verificar si el usuario es el owner del contrato
+  useEffect(() => {
+    if (!provider || !account) {
+      setIsOwner(false);
+      return;
+    }
+
+    const checkOwner = async () => {
+      try {
+        const owner = await getContractOwner(provider);
+        setIsOwner(owner?.toLowerCase() === account.toLowerCase());
+        
+        // Obtener balance del contrato si es owner
+        if (owner?.toLowerCase() === account.toLowerCase()) {
+          const balance = await getContractBalance(provider);
+          setContractBalance(balance);
+        }
+      } catch (error) {
+        console.error('Error checking owner:', error);
+        setIsOwner(false);
+      }
+    };
+
+    checkOwner();
+  }, [provider, account]);
+
+  // Función para retirar fondos (owner only)
+  const handleWithdraw = useCallback(async () => {
+    if (!signer || !isOwner) return;
+
+    try {
+      toast.loading('Retirando fondos...', { id: 'withdraw' });
+      const result = await withdraw(signer);
+      
+      if (result.success) {
+        toast.success('Fondos retirados exitosamente!', { id: 'withdraw' });
+        setShowWithdrawModal(false);
+        // Actualizar balance
+        if (provider) {
+          const balance = await getContractBalance(provider);
+          setContractBalance(balance);
+        }
+      } else {
+        toast.error(result.error || 'Error al retirar fondos', { id: 'withdraw' });
+      }
+    } catch (error: any) {
+      console.error('Failed to withdraw:', error);
+      toast.error(error.message || 'Error al retirar fondos', { id: 'withdraw' });
+    }
+  }, [signer, isOwner, provider]);
+
+  // Función para retiro de emergencia (owner only)
+  const handleEmergencyWithdraw = useCallback(async () => {
+    if (!signer || !isOwner) return;
+
+    if (!confirm('⚠️ ADVERTENCIA: Esto retirará TODOS los fondos del contrato, incluso los asignados a carreras activas. ¿Estás seguro?')) {
+      return;
+    }
+
+    try {
+      toast.loading('Retirando todos los fondos...', { id: 'emergency' });
+      const result = await emergencyWithdraw(signer);
+      
+      if (result.success) {
+        toast.success('Fondos de emergencia retirados!', { id: 'emergency' });
+        setShowWithdrawModal(false);
+        // Actualizar balance
+        if (provider) {
+          const balance = await getContractBalance(provider);
+          setContractBalance(balance);
+        }
+      } else {
+        toast.error(result.error || 'Error al retirar fondos', { id: 'emergency' });
+      }
+    } catch (error: any) {
+      console.error('Failed to emergency withdraw:', error);
+      toast.error(error.message || 'Error al retirar fondos', { id: 'emergency' });
+    }
+  }, [signer, isOwner, provider]);
 
   const handleRaceEnd = useCallback(async (winnerId: number) => {
     setRaceState('finished');
@@ -477,6 +564,17 @@ export default function RacePage() {
             >
               <FaFlask /> {testMode ? 'Exit Test Mode' : 'Test Mode'}
             </button>
+            {isOwner && (
+              <button 
+                onClick={() => {
+                  setShowWithdrawModal(true);
+                  setShowMenu(false);
+                }}
+                className="w-full text-left py-2 px-3 rounded-lg flex items-center gap-2 transition-colors hover:bg-[#1a4a2e] text-[#d4a517]"
+              >
+                💰 Withdraw Funds
+              </button>
+            )}
           </div>
         </div>
       )}
@@ -803,6 +901,68 @@ export default function RacePage() {
         isOpen={showHelpModal}
         onClose={() => setShowHelpModal(false)}
       />
+
+      {/* Withdraw Modal (Owner Only) */}
+      {showWithdrawModal && isOwner && (
+        <div className="fixed inset-0 z-50 bg-black/80 flex items-center justify-center p-4" onClick={() => setShowWithdrawModal(false)}>
+          <div 
+            className="bg-[#1a4a2e] border-2 border-[#d4a517] rounded-xl p-6 max-w-md w-full"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex justify-between items-center mb-4">
+              <h3 className="text-white font-bold text-xl">Withdraw Funds</h3>
+              <button 
+                onClick={() => setShowWithdrawModal(false)}
+                className="text-white/60 hover:text-white text-2xl"
+              >
+                &times;
+              </button>
+            </div>
+            
+            <div className="mb-4">
+              <div className="text-[#7cb894] text-sm mb-2">Contract Balance</div>
+              <div className="text-white font-bold text-2xl">
+                {ethers.formatEther(contractBalance)} BNB
+              </div>
+            </div>
+
+            <div className="space-y-3">
+              <button
+                onClick={handleWithdraw}
+                disabled={contractBalance === BigInt(0)}
+                className={`
+                  w-full py-3 px-4 rounded-lg font-bold text-white transition-all
+                  ${contractBalance > BigInt(0)
+                    ? 'bg-[#d4a517] hover:bg-[#b8920f] text-black'
+                    : 'bg-gray-500 cursor-not-allowed'
+                  }
+                `}
+              >
+                Withdraw Available Funds
+              </button>
+              
+              <button
+                onClick={handleEmergencyWithdraw}
+                disabled={contractBalance === BigInt(0)}
+                className={`
+                  w-full py-3 px-4 rounded-lg font-bold transition-all
+                  ${contractBalance > BigInt(0)
+                    ? 'bg-red-600 hover:bg-red-700 text-white'
+                    : 'bg-gray-500 cursor-not-allowed text-white'
+                  }
+                `}
+              >
+                ⚠️ Emergency Withdraw (All Funds)
+              </button>
+            </div>
+
+            <div className="mt-4 text-xs text-[#7cb894]">
+              <p>• Normal withdraw only withdraws funds not assigned to active races</p>
+              <p>• Emergency withdraw withdraws ALL funds (use with caution)</p>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

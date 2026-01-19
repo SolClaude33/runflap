@@ -115,8 +115,11 @@ contract FlapRace {
         // Initialize race if it doesn't exist
         if (race.startTime == 0) {
             race.raceId = raceId;
-            race.startTime = nextRaceStartTime;
-            race.bettingEndTime = nextRaceStartTime + BETTING_DURATION;
+            // Use current timestamp if nextRaceStartTime is in the past
+            // This ensures the race can start immediately if the contract was deployed a while ago
+            uint256 actualStartTime = nextRaceStartTime >= block.timestamp ? nextRaceStartTime : block.timestamp;
+            race.startTime = actualStartTime;
+            race.bettingEndTime = actualStartTime + BETTING_DURATION;
             race.raceEndTime = race.bettingEndTime + COUNTDOWN_DURATION + RACE_DURATION;
             race.totalPool = 0;
             race.nextRacePool = 0;

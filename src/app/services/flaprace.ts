@@ -1221,6 +1221,88 @@ export const depositToContract = async (
 };
 
 /**
+ * Withdraw funds from contract (owner only)
+ * Only allows withdrawing funds that are not assigned to active races
+ */
+export const withdraw = async (
+  signer: ethers.JsonRpcSigner
+): Promise<{ success: boolean; txHash?: string; error?: string }> => {
+  try {
+    const contract = getContract(signer);
+    const tx = await contract.withdraw();
+    const receipt = await tx.wait();
+    
+    return {
+      success: true,
+      txHash: receipt.hash,
+    };
+  } catch (error: any) {
+    console.error('Error withdrawing funds:', error);
+    return {
+      success: false,
+      error: error.reason || error.message || 'Error al retirar fondos',
+    };
+  }
+};
+
+/**
+ * Emergency withdraw all funds (owner only, for extreme emergencies)
+ * Use with caution - may affect active races
+ */
+export const emergencyWithdraw = async (
+  signer: ethers.JsonRpcSigner
+): Promise<{ success: boolean; txHash?: string; error?: string }> => {
+  try {
+    const contract = getContract(signer);
+    const tx = await contract.emergencyWithdraw();
+    const receipt = await tx.wait();
+    
+    return {
+      success: true,
+      txHash: receipt.hash,
+    };
+  } catch (error: any) {
+    console.error('Error emergency withdrawing funds:', error);
+    return {
+      success: false,
+      error: error.reason || error.message || 'Error al retirar fondos de emergencia',
+    };
+  }
+};
+
+/**
+ * Get contract owner address
+ */
+export const getContractOwner = async (
+  provider: ethers.BrowserProvider
+): Promise<string | null> => {
+  try {
+    const contract = getContractReadOnly(provider);
+    const owner = await contract.owner();
+    return owner;
+  } catch (error) {
+    console.error('Error getting contract owner:', error);
+    return null;
+  }
+};
+
+/**
+ * Get contract balance
+ */
+export const getContractBalance = async (
+  provider: ethers.BrowserProvider
+): Promise<bigint> => {
+  try {
+    const contract = getContractReadOnly(provider);
+    const balance = await contract.getContractBalance();
+    return balance;
+  } catch (error) {
+    console.error('Error getting contract balance:', error);
+    return BigInt(0);
+  }
+};
+
+/**
  * Suscribirse a eventos del contrato
  */
 export const subscribeToRaceEvents = (
