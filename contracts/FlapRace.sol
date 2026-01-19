@@ -159,6 +159,59 @@ contract FlapRace {
     }
 
     /**
+     * @dev Internal function to generate race seed deterministically
+     * CRITICAL: This function MUST generate the SAME seed for ALL clients
+     * The seed is based on: race data + earliest available block hash after betting closes
+     * This ensures synchronization while maintaining unpredictability
+     */
+    function _generateRaceSeedInternal(uint256 raceId) internal {
+        Race storage race = races[raceId];
+        
+        // Calculate total bets for this race
+        uint256 totalBets = raceBets[raceId].length;
+        
+        // CRITICAL: We need a deterministic but unpredictable source
+        // We use the blockhash of a specific block relative to betting end time
+        // BSC has ~3 second blocks, so we calculate which block was closest to bettingEndTime
+        
+        // All clients will calculate the same reference block
+        uint256 blocksAfterBetting = (block.timestamp - race.bettingEndTime) / 3; // ~3s per block
+        
+        // Get a recent blockhash (within last 256 blocks for it to be available)
+        // We target the block 5 blocks after betting ended to ensure it exists
+        uint256 targetBlocksBack = blocksAfterBetting > 5 ? blocksAfterBetting - 5 : 0;
+        
+        // Ensure we stay within the 256 block limit
+        targetBlocksBack = targetBlocksBack > 255 ? 255 : targetBlocksBack;
+        
+        bytes32 referenceBlockHash = blockhash(block.number - targetBlocksBack);
+        
+        // If blockhash is not available (should not happen if called within reasonable time)
+        // Use fallback deterministic seed
+        if (referenceBlockHash == bytes32(0)) {
+            race.raceSeed = uint256(keccak256(abi.encodePacked(
+                raceId,
+                race.bettingEndTime,
+                race.startTime,
+                totalBets,
+                race.totalPool
+            )));
+        } else {
+            // Primary method: Combine block hash with race data
+            race.raceSeed = uint256(keccak256(abi.encodePacked(
+                raceId,
+                race.bettingEndTime,
+                referenceBlockHash,
+                totalBets,
+                race.totalPool
+            )));
+        }
+        
+        race.seedGenerated = true;
+        emit RaceSeedGenerated(raceId, race.raceSeed);
+    }
+    
+    /**
      * @dev Generate deterministic seed for race
      * Can be called by anyone once betting period ends
      * CRITICAL: This must be called BEFORE the race visual starts
@@ -170,54 +223,7 @@ contract FlapRace {
         require(!race.seedGenerated, "Seed already generated");
         require(block.timestamp >= race.bettingEndTime, "Betting period not ended yet");
         
-        // Generate deterministic seed combining:
-        // 1. raceId (for uniqueness)
-        // 2. bettingEndTime (timestamp when betting closed)
-        // 3. block.difficulty or block.prevrandao (unpredictable before betting closes)
-        // 4. Total number of bets (unpredictable before betting closes)
-        // 5. Total pool amount (unpredictable before betting closes)
-        
-        // Get blockhash from a recent block for unpredictability
-        // Use the block number when betting ended
-        uint256 blockNumber = block.number;
-        bytes32 blockHash = blockhash(blockNumber - 1); // Previous block hash
-        
-        // If blockhash is 0 (too old, >256 blocks), use current block data
-        if (blockHash == bytes32(0)) {
-            blockHash = blockhash(block.number - 1);
-        }
-        
-        // Combine all factors into a deterministic seed
-        // Use block.prevrandao (or block.difficulty on older chains) for additional randomness
-        uint256 randomFactor;
-        // Try to use prevrandao (post-merge Ethereum/BSC)
-        // This will be different for each block but same for all clients reading the same block
-        assembly {
-            randomFactor := prevrandao()
-        }
-        
-        // If prevrandao is 0, fallback to difficulty
-        if (randomFactor == 0) {
-            randomFactor = block.difficulty;
-        }
-        
-        // Calculate total bets for this race
-        uint256 totalBets = raceBets[raceId].length;
-        
-        // Combine all factors using XOR and hashing for uniform distribution
-        race.raceSeed = uint256(keccak256(abi.encodePacked(
-            raceId,
-            race.bettingEndTime,
-            blockHash,
-            randomFactor,
-            totalBets,
-            race.totalPool,
-            block.timestamp
-        )));
-        
-        race.seedGenerated = true;
-        
-        emit RaceSeedGenerated(raceId, race.raceSeed);
+        _generateRaceSeedInternal(raceId);
     }
 
     /**
@@ -231,6 +237,11 @@ contract FlapRace {
         require(race.startTime > 0, "Race does not exist");
         require(!race.finalized, "Race already finalized");
         require(block.timestamp >= race.raceEndTime, "Race not finished yet");
+        
+        // Auto-generate seed if not generated yet
+        if (!race.seedGenerated) {
+            _generateRaceSeedInternal(raceId);
+        }
         
         race.winner = winner;
         race.finalized = true;
@@ -387,9 +398,16 @@ contract FlapRace {
     
     /**
      * @dev Get race seed (convenience function)
+     * Automatically generates seed if not generated yet and betting has closed
      */
-    function getRaceSeed(uint256 raceId) external view returns (uint256 seed, bool generated) {
-        Race memory race = races[raceId];
+    function getRaceSeed(uint256 raceId) external returns (uint256 seed, bool generated) {
+        Race storage race = races[raceId];
+        
+        // Auto-generate seed if betting has closed and seed not generated yet
+        if (!race.seedGenerated && race.startTime > 0 && block.timestamp >= race.bettingEndTime) {
+            _generateRaceSeed(raceId);
+        }
+        
         return (race.raceSeed, race.seedGenerated);
     }
 
