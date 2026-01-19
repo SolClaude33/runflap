@@ -405,7 +405,7 @@ contract FlapRace {
         
         // Auto-generate seed if betting has closed and seed not generated yet
         if (!race.seedGenerated && race.startTime > 0 && block.timestamp >= race.bettingEndTime) {
-            _generateRaceSeed(raceId);
+            _generateRaceSeedInternal(raceId);
         }
         
         return (race.raceSeed, race.seedGenerated);
