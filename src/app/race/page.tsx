@@ -71,6 +71,16 @@ export default function RacePage() {
   const [showMobileBets, setShowMobileBets] = useState(false);
   const [bettingTimer, setBettingTimer] = useState(BETTING_TIME);
   const [preCountdown, setPreCountdown] = useState<number | null>(null);
+  // Guardar timestamps del contrato para countdown local suave
+  const contractTimestampsRef = useRef<{
+    bettingEndTime: number | null;
+    raceStartTime: number | null;
+    raceEndTime: number | null;
+  }>({
+    bettingEndTime: null,
+    raceStartTime: null,
+    raceEndTime: null,
+  });
   const [validBetAmounts, setValidBetAmounts] = useState<string[]>(['0.01', '0.05', '0.1', '0.5']);
   const [isOwner, setIsOwner] = useState(false);
   const [contractBalance, setContractBalance] = useState<bigint>(BigInt(0));
@@ -131,6 +141,15 @@ export default function RacePage() {
           const raceStartTime = bettingEndTime + PRE_COUNTDOWN_DURATION; // Cuando empieza la carrera visual
           const raceEndTime = Number(info.raceEndTime);
 
+          // Guardar timestamps del contrato una vez para countdown local suave
+          if (startTime > 0 && bettingEndTime > 0) {
+            contractTimestampsRef.current = {
+              bettingEndTime: Number(bettingEndTime),
+              raceStartTime: Number(bettingEndTime) + PRE_COUNTDOWN_DURATION,
+              raceEndTime: Number(raceEndTime),
+            };
+          }
+
           // Si la carrera no ha sido inicializada (startTime = 0), significa que nadie ha apostado todavía
           // En este caso, la carrera empezará cuando alguien apueste, pero mostramos estado de "betting" listo para apostar
           if (startTime === 0 || bettingEndTime === 0) {
@@ -139,21 +158,17 @@ export default function RacePage() {
             setRaceState('betting');
             // No hay timer porque la carrera empezará cuando alguien apueste
             setBettingTimer(BETTING_TIME);
+            contractTimestampsRef.current = {
+              bettingEndTime: null,
+              raceStartTime: null,
+              raceEndTime: null,
+            };
           } else if (now < bettingEndTime) {
             setRaceState('betting');
-            setBettingTimer(Math.max(0, bettingEndTime - now));
           } else if (now < raceStartTime) {
             setRaceState('pre_countdown');
-            setPreCountdown(Math.max(0, raceStartTime - now));
           } else if (now < raceEndTime) {
             setRaceState('racing');
-            // Calcular countdown basado en tiempo del contrato
-            const timeSinceRaceStart = now - raceStartTime;
-            if (timeSinceRaceStart < 3) {
-              setCountdown(3 - timeSinceRaceStart);
-            } else {
-              setCountdown(null);
-            }
           } else if (info.finalized) {
             setRaceState('finished');
             if (info.winner > 0) {
@@ -258,31 +273,31 @@ export default function RacePage() {
   }, [provider, fetchRaceData, raceState]);
 
   // Timer local suave que se actualiza cada segundo
-  // Se sincroniza con los tiempos del contrato cuando fetchRaceData se ejecuta
+  // Usa los timestamps guardados del contrato para countdown suave
   useEffect(() => {
-    if (!raceInfo || raceInfo.startTime === 0) return;
-
-    const now = Math.floor(Date.now() / 1000);
-    const startTime = Number(raceInfo.startTime);
-    const bettingEndTime = Number(raceInfo.bettingEndTime);
-    const raceStartTime = bettingEndTime + PRE_COUNTDOWN_DURATION;
-    const raceEndTime = Number(raceInfo.raceEndTime);
+    const timestamps = contractTimestampsRef.current;
+    if (!timestamps.bettingEndTime && !timestamps.raceStartTime && !timestamps.raceEndTime) {
+      // No hay timestamps guardados aún, esperar a que fetchRaceData los establezca
+      return;
+    }
 
     // Función para actualizar timers basado en tiempo actual
     const updateTimers = () => {
       const currentTime = Math.floor(Date.now() / 1000);
       
-      if (currentTime < bettingEndTime) {
-        // Betting phase
-        const remaining = Math.max(0, bettingEndTime - currentTime);
-        setBettingTimer(Math.ceil(remaining));
-      } else if (currentTime < raceStartTime) {
-        // Pre-countdown phase
-        const remaining = Math.max(0, raceStartTime - currentTime);
-        setPreCountdown(Math.ceil(remaining));
-      } else if (currentTime < raceEndTime) {
+      if (timestamps.bettingEndTime && currentTime < timestamps.bettingEndTime) {
+        // Betting phase - countdown regresivo suave
+        const remaining = Math.max(0, timestamps.bettingEndTime - currentTime);
+        setBettingTimer(remaining);
+      } else if (timestamps.raceStartTime && currentTime < timestamps.raceStartTime) {
+        // Pre-countdown phase - countdown regresivo suave
+        const remaining = Math.max(0, timestamps.raceStartTime - currentTime);
+        setPreCountdown(remaining);
+      } else if (timestamps.raceEndTime && currentTime < timestamps.raceEndTime) {
         // Racing phase
-        const timeSinceRaceStart = currentTime - raceStartTime;
+        const timeSinceRaceStart = timestamps.raceStartTime 
+          ? currentTime - timestamps.raceStartTime 
+          : 0;
         if (timeSinceRaceStart < 3) {
           setCountdown(Math.max(0, 3 - timeSinceRaceStart));
         } else {
@@ -294,11 +309,11 @@ export default function RacePage() {
     // Actualizar inmediatamente
     updateTimers();
 
-    // Actualizar cada segundo para timer suave
+    // Actualizar cada segundo para timer suave (countdown regresivo)
     const timerInterval = setInterval(updateTimers, 1000);
     
     return () => clearInterval(timerInterval);
-  }, [raceInfo, raceState]);
+  }, [raceState]); // Solo depende de raceState, no de raceInfo
 
   // Obtener montos válidos de apuesta
   useEffect(() => {
@@ -474,23 +489,49 @@ export default function RacePage() {
   }, [signer, account, raceState, userBet, raceNumber, testMode, fetchRaceData]);
 
   const handleClaimWinnings = useCallback(async () => {
-    if (!signer || !userBet) return;
+    if (!signer || !userBet) {
+      toast.error('No hay apuesta para reclamar');
+      return;
+    }
+
+    if (!raceInfo?.finalized) {
+      toast.error('La carrera aún no ha sido finalizada');
+      return;
+    }
+
+    if (userBet.carId !== raceInfo.winner) {
+      toast.error('No ganaste esta carrera');
+      return;
+    }
+
+    if (userBet.claimed) {
+      toast.error('Ya reclamaste tus ganancias');
+      return;
+    }
 
     try {
       toast.loading('Reclamando ganancias...', { id: 'claim' });
       const result = await claimWinnings(signer, raceNumber);
       
       if (result.success) {
-        toast.success('Ganancias reclamadas exitosamente!', { id: 'claim' });
-        setTimeout(() => fetchRaceData(), 2000);
+        toast.success('¡Ganancias reclamadas exitosamente!', { id: 'claim' });
+        // Recargar datos para actualizar el estado de claimed
+        setTimeout(() => {
+          fetchRaceData();
+          // También actualizar el balance de la wallet
+          if (provider) {
+            // El balance se actualizará automáticamente por el Web3Provider
+          }
+        }, 2000);
       } else {
         toast.error(result.error || 'Error al reclamar ganancias', { id: 'claim' });
       }
     } catch (error: any) {
       console.error('Failed to claim winnings:', error);
-      toast.error(error.message || 'Error al reclamar ganancias', { id: 'claim' });
+      const errorMessage = error.reason || error.message || 'Error al reclamar ganancias';
+      toast.error(errorMessage, { id: 'claim' });
     }
-  }, [signer, userBet, raceNumber, fetchRaceData]);
+  }, [signer, userBet, raceNumber, raceInfo, fetchRaceData, provider]);
 
   const getCarName = (id: number) => CAR_NAMES[id] || 'Unknown';
 
