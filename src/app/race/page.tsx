@@ -766,17 +766,26 @@ export default function RacePage() {
             ) : (
               <div className="space-y-3">
                 {userBet ? (
-                  <div className="bg-[#0d3320] border-2 border-[#2d6b4a] rounded-xl p-3 text-center">
+                  <div className={`${raceInfo?.finalized && userBet.carId === raceInfo.winner && !userBet.claimed ? 'bg-[#d4a517]/20 border-[#d4a517]' : 'bg-[#0d3320] border-[#2d6b4a]'} border-2 rounded-xl p-3 text-center`}>
                     <div className="text-[#7cb894] text-xs mb-1">Your Current Bet</div>
                     <div className="font-bold text-lg text-[#d4a517]">{ethers.formatEther(userBet.amount)} BNB</div>
                     <div className="text-sm">{getCarName(userBet.carId)}</div>
                     {raceInfo?.finalized && userBet.carId === raceInfo.winner && !userBet.claimed && (
                       <button
                         onClick={handleClaimWinnings}
-                        className="mt-2 bg-[#d4a517] hover:bg-[#b8940f] text-black px-4 py-2 rounded-lg font-bold text-sm"
+                        className="mt-3 w-full bg-[#d4a517] hover:bg-[#b8940f] text-black px-4 py-3 rounded-lg font-bold text-base shadow-lg animate-pulse"
                       >
-                        Claim Winnings
+                        🎉 Claim Winnings
                       </button>
+                    )}
+                    {raceInfo?.finalized && userBet.carId === raceInfo.winner && userBet.claimed && (
+                      <div className="mt-2 text-[#7cb894] text-sm">✅ Winnings claimed</div>
+                    )}
+                    {raceInfo?.finalized && userBet.carId !== raceInfo.winner && (
+                      <div className="mt-2 text-red-400 text-sm">❌ You lost this race</div>
+                    )}
+                    {!raceInfo?.finalized && raceState === 'finished' && (
+                      <div className="mt-2 text-yellow-400 text-sm">⏳ Race not finalized yet</div>
                     )}
                   </div>
                 ) : (
@@ -967,9 +976,26 @@ export default function RacePage() {
             </div>
 
             {userBet && (
-              <div className="bg-[#d4a517]/20 border-2 border-[#d4a517] rounded-xl p-3 mb-3 text-center">
+              <div className={`${raceInfo?.finalized && userBet.carId === raceInfo.winner && !userBet.claimed ? 'bg-[#d4a517]/30 border-[#d4a517]' : 'bg-[#d4a517]/20 border-[#d4a517]'} border-2 rounded-xl p-3 mb-3 text-center`}>
                 <div className="text-[#d4a517] text-xs">Your Bet</div>
                 <div className="font-bold text-lg text-white">{ethers.formatEther(userBet.amount)} BNB on {getCarName(userBet.carId)}</div>
+                {raceInfo?.finalized && userBet.carId === raceInfo.winner && !userBet.claimed && (
+                  <button
+                    onClick={handleClaimWinnings}
+                    className="mt-3 w-full bg-[#d4a517] hover:bg-[#b8940f] text-black px-4 py-3 rounded-lg font-bold text-base shadow-lg"
+                  >
+                    🎉 Claim Winnings
+                  </button>
+                )}
+                {raceInfo?.finalized && userBet.carId === raceInfo.winner && userBet.claimed && (
+                  <div className="mt-2 text-[#7cb894] text-sm">✅ Winnings claimed</div>
+                )}
+                {raceInfo?.finalized && userBet.carId !== raceInfo.winner && (
+                  <div className="mt-2 text-red-400 text-sm">❌ You lost this race</div>
+                )}
+                {!raceInfo?.finalized && raceState === 'finished' && (
+                  <div className="mt-2 text-yellow-400 text-sm">⏳ Race not finalized yet</div>
+                )}
               </div>
             )}
 
