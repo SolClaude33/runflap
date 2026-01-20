@@ -24,6 +24,7 @@ interface Racer {
 }
 
 const TOTAL_LAPS = 5;
+const RACE_DURATION_SECONDS = 30; // Match raceSimulation.ts
 
 interface RaceTrackProps {
   raceState: 'betting' | 'pre_countdown' | 'countdown' | 'racing' | 'finished';
@@ -288,223 +289,161 @@ export default function RaceTrack({ raceState, countdown, preCountdown, onRaceEn
       const actualRaceStartTime = raceStartTime > 0 ? raceStartTime : now;
       const contractRaceTime = Math.max(0, now - actualRaceStartTime);
       
-      // CRITICAL: Calculate deltaTime based on contract time, not frame time
-      // This ensures deterministic distance calculations matching raceSimulation.ts
-      const contractDeltaTime = contractRaceTime - previousContractTimeRef.current;
-      const deltaTime = Math.max(0, Math.min(contractDeltaTime, 0.1)); // Cap at 0.1s (1 tick) for stability
-      previousContractTimeRef.current = contractRaceTime; // Update for next frame
-      
       // CRITICAL: Update raceTimeRef to contract time for synchronization
       raceTimeRef.current = contractRaceTime;
       lastTimeRef.current = currentTime;
       
-      // CRITICAL: Consume RNG based on synchronized contract time, not frame count
-      // Use time-based ticks (every 0.1 seconds) instead of frame-based ticks
-      // This ensures all clients consume RNG at the same rate regardless of FPS
-      // CRITICAL: Use Math.floor to ensure exact same tick calculation for all clients
-      const timeBasedTick = Math.floor(contractRaceTime * 10); // 10 ticks per second
-      
-      // CRITICAL: If we're behind on RNG consumption (e.g., client connected late),
-      // catch up by consuming RNG for all missed ticks
-      // This ensures all clients have the same RNG state at any given contract time
-      // IMPORTANT: Always consume RNG in the same order, even if we're catching up
-      while (tickCounterRef.current < timeBasedTick) {
-        rngRef.current(); // Consume RNG to catch up - MUST be in exact same order
-        tickCounterRef.current++;
-      }
-      
-      // CRITICAL: Use the synchronized tick, not a local counter
-      const tick = timeBasedTick;
-      const rng = rngRef.current;
+      // CRITICAL: Process all ticks that have passed since the last frame
+      // This ensures deterministic state updates matching raceSimulation.ts exactly
+      // Each tick represents 0.1 seconds (10 ticks per second)
+      const targetTick = Math.floor(contractRaceTime * 10); // 10 ticks per second
+      let currentRacers = racersRef.current;
+      let updatedRacers = [...currentRacers]; // Create a mutable copy
 
-      const currentRacers = racersRef.current;
-      let raceWinner: Racer | null = null;
+      // CRITICAL: Process each tick individually to ensure complete determinism
+      // This matches the exact logic in raceSimulation.ts
+      for (let tick = lastProcessedTickRef.current; tick < targetTick; tick++) {
+        const tickContractTime = tick / 10; // Convert tick to contract time
+        const tickDeltaTime = 0.1; // Each tick represents 0.1 seconds
 
-      // Constants
-      const RACE_DURATION_SECONDS = 30;
-
-      // Calculate all racers' total distances for position sorting
-      // Sort by total distance DESCENDING (highest distance = winner)
-      const racerDistances = currentRacers.map(r => ({
-        id: r.id,
-        totalDist: (r.lap - 1) * totalLength + r.distance
-      })).sort((a, b) => b.totalDist - a.totalDist);
-      
-      const leaderDist = racerDistances[0].totalDist;
-      const lastPlaceDist = racerDistances[3].totalDist;
-
-      const updated = currentRacers.map((racer, index) => {
-        if (racer.finished) return racer;
-
-        let newTargetSpeed = racer.targetSpeed;
-        let newLastSpeedChange = racer.lastSpeedChange;
-        const racerTotalDist = (racer.lap - 1) * totalLength + racer.distance;
-        const position = racerDistances.findIndex(r => r.id === racer.id) + 1;
+        // Re-calculate racer distances for accurate leader/position for this tick
+        const racerDistances = updatedRacers.map(r => ({
+          id: r.id,
+          totalDist: (r.lap - 1) * totalLength + r.distance
+        })).sort((a, b) => b.totalDist - a.totalDist);
         
-        // Speed changes every 0.3 seconds (3 ticks at 10 ticks/second)
-        // Use time-based ticks for synchronization across all clients
-        if (tick % 3 === index) {
-          // Base variation: ±25% for more dramatic racing (was ±12%)
-          const variation = 0.75 + rng() * 0.50;
-          newTargetSpeed = racer.baseSpeed * variation;
+        const leaderDist = racerDistances[0].totalDist;
+        const lastPlaceDist = racerDistances[3].totalDist;
+
+        updatedRacers = updatedRacers.map((racer, index) => {
+          if (racer.finished) return racer;
+
+          let newTargetSpeed = racer.targetSpeed;
+          let newLastSpeedChange = racer.lastSpeedChange;
+          const racerTotalDist = (racer.lap - 1) * totalLength + racer.distance;
+          const position = racerDistances.findIndex(r => r.id === racer.id) + 1;
           
-          // DRAMATIC EVENTS (15% chance each tick cycle, was 8%)
-          const eventRoll = rng();
-          
-          if (eventRoll < 0.075) {
-            // SURGE! Random racer gets massive boost (increased from 1.20 to 1.35)
-            newTargetSpeed *= 1.35;
-          } else if (eventRoll < 0.15) {
-            // STUMBLE! Random slowdown (increased from 0.80 to 0.70)
-            newTargetSpeed *= 0.70;
+          // Speed changes every 0.3 seconds (3 ticks)
+          if (tick % 3 === index) {
+            const variation = 0.75 + rngRef.current() * 0.50;
+            newTargetSpeed = racer.baseSpeed * variation;
+            
+            const eventRoll = rngRef.current();
+            if (eventRoll < 0.075) {
+              newTargetSpeed *= 1.35;
+            } else if (eventRoll < 0.15) {
+              newTargetSpeed *= 0.70;
+            }
+            
+            const distanceBehind = leaderDist - racerTotalDist;
+            const timeRemaining = RACE_DURATION_SECONDS - tickContractTime;
+            const isFinalSeconds = timeRemaining <= 5;
+            
+            if (distanceBehind > 0 && position > 1 && !isFinalSeconds) {
+              const catchUpBoost = Math.min(0.06, (distanceBehind / totalLength) * 0.10);
+              newTargetSpeed *= (1 + catchUpBoost);
+            }
+            
+            if (isFinalSeconds && position > 1) {
+              const minimalCatchUp = Math.min(0.02, (distanceBehind / totalLength) * 0.05);
+              newTargetSpeed *= (1 + minimalCatchUp);
+            }
+            
+            if (position === 1 && (leaderDist - lastPlaceDist) > totalLength * 0.15) {
+              newTargetSpeed *= 0.90;
+            }
+            
+            const raceProgress = (racer.lap - 1 + racer.distance / totalLength) / TOTAL_LAPS;
+            if (racer.lap === TOTAL_LAPS && position > 1) {
+              newTargetSpeed *= 1.15 + rngRef.current() * 0.10;
+            }
+            
+            if (raceProgress > 0.45 && raceProgress < 0.55) {
+              newTargetSpeed *= 0.85 + rngRef.current() * 0.30;
+            }
+            
+            newTargetSpeed = Math.max(300, Math.min(650, newTargetSpeed));
+            newLastSpeedChange = tickContractTime;
           }
           
-          // Reduced rubber-banding: trailing racers get smaller boost
-          // CRITICAL: Disable rubber-banding in final 5 seconds to increase separation at finish
-          const distanceBehind = leaderDist - racerTotalDist;
-          const timeRemaining = RACE_DURATION_SECONDS - contractRaceTime;
+          const speedLerp = 0.20;
+          const timeSinceSpeedChange = tickContractTime - racer.lastSpeedChange;
+          const lerpFactor = Math.min(1.0, timeSinceSpeedChange * (1 / speedLerp));
+          const newSpeed = racer.currentSpeed + (newTargetSpeed - racer.currentSpeed) * lerpFactor;
+          
+          const totalDistanceNeeded = totalLength * TOTAL_LAPS;
+          const distanceRemaining = totalDistanceNeeded - racerTotalDist;
+          const timeRemaining = Math.max(0.1, RACE_DURATION_SECONDS - tickContractTime);
+          
           const isFinalSeconds = timeRemaining <= 5;
-          
-          if (distanceBehind > 0 && position > 1 && !isFinalSeconds) {
-            // Smaller boost for those further behind (only if not in final seconds)
-            const catchUpBoost = Math.min(0.06, (distanceBehind / totalLength) * 0.10);
-            newTargetSpeed *= (1 + catchUpBoost);
+          let adjustedSpeed = newSpeed;
+          if (timeRemaining > 0 && distanceRemaining > 0 && !isFinalSeconds) {
+            const requiredSpeed = distanceRemaining / timeRemaining;
+            adjustedSpeed = newSpeed * 0.70 + requiredSpeed * 0.30;
+            adjustedSpeed = Math.max(350, Math.min(700, adjustedSpeed));
+          } else if (isFinalSeconds) {
+            adjustedSpeed = newSpeed;
           }
           
-          // In final seconds, reduce rubber-banding even more to create clear separation
-          if (isFinalSeconds && position > 1) {
-            // Minimal catch-up in final seconds (only 2% max)
-            const minimalCatchUp = Math.min(0.02, (distanceBehind / totalLength) * 0.05);
-            newTargetSpeed *= (1 + minimalCatchUp);
+          let newDistance = racer.distance + adjustedSpeed * tickDeltaTime;
+          let newLap = racer.lap;
+          
+          if (racer.lap === TOTAL_LAPS && newDistance >= totalLength) {
+            newDistance = totalLength;
+            newLap = TOTAL_LAPS;
+          } else if (newDistance >= totalLength && racer.lap < TOTAL_LAPS) {
+            newLap = racer.lap + 1;
+            newDistance = newDistance - totalLength;
           }
           
-          // Leader penalty: more drag when too far ahead (increased from 0.94 to 0.90)
-          if (position === 1 && (leaderDist - lastPlaceDist) > totalLength * 0.15) {
-            newTargetSpeed *= 0.90;
+          if (newLap > TOTAL_LAPS) {
+            newLap = TOTAL_LAPS;
+            newDistance = totalLength;
           }
-          
-          // Drama moments at key race points
-          const raceProgress = (racer.lap - 1 + racer.distance / totalLength) / TOTAL_LAPS;
-          
-          // Final lap surge for non-leaders (increased from 1.10 to 1.15)
-          if (racer.lap === TOTAL_LAPS && position > 1) {
-            newTargetSpeed *= 1.15 + rng() * 0.10;
-          }
-          
-          // Mid-race shakeup (more dramatic)
-          if (raceProgress > 0.45 && raceProgress < 0.55) {
-            newTargetSpeed *= 0.85 + rng() * 0.30;
-          }
-          
-          // Clamp speeds - wider range for 30-second race (was 350-550, now 300-650)
-          newTargetSpeed = Math.max(300, Math.min(650, newTargetSpeed));
-          newLastSpeedChange = raceTimeRef.current;
-        }
-        
-        // CRITICAL: Use deterministic speed calculation based on contract time
-        // This ensures all clients calculate the same speeds at the same time
-        // Speed changes happen at specific ticks, so we need to interpolate deterministically
-        const speedLerp = 0.20; // Interpolation factor
-        // Calculate time since last speed change using contract time
-        const timeSinceSpeedChange = contractRaceTime - racer.lastSpeedChange;
-        // Apply interpolation deterministically based on time, not frames
-        const lerpFactor = Math.min(1.0, timeSinceSpeedChange * (1 / speedLerp)); // Time-based lerp
-        const newSpeed = racer.currentSpeed + (newTargetSpeed - racer.currentSpeed) * lerpFactor;
-        
-        // CRITICAL: Calculate distance using contract time to ensure synchronization
-        // Instead of using deltaTime frame-by-frame, calculate position based on contract time
-        // This ensures all clients see the same positions at the same contract time
-        // Adjust speed based on race progress to ensure race completes in ~30 seconds
-        const raceProgress = contractRaceTime / RACE_DURATION_SECONDS;
-        const totalDistanceNeeded = totalLength * TOTAL_LAPS;
-        const distanceRemaining = totalDistanceNeeded - racerTotalDist;
-        const timeRemaining = Math.max(0.1, RACE_DURATION_SECONDS - contractRaceTime);
-        
-        // Dynamic speed adjustment to ensure race completes in time
-        // In final seconds, reduce speed adjustment to allow natural separation
-        const isFinalSeconds = timeRemaining <= 5;
-        let adjustedSpeed = newSpeed;
-        if (timeRemaining > 0 && distanceRemaining > 0 && !isFinalSeconds) {
-          const requiredSpeed = distanceRemaining / timeRemaining;
-          // Blend between current speed and required speed (70% current, 30% required)
-          // Increased required speed influence to ensure race completes in time
-          adjustedSpeed = newSpeed * 0.70 + requiredSpeed * 0.30;
-          // Clamp to reasonable range (wider range)
-          adjustedSpeed = Math.max(350, Math.min(700, adjustedSpeed));
-        } else if (isFinalSeconds) {
-          // In final seconds, use natural speed with minimal adjustment to create clear separation
-          adjustedSpeed = newSpeed;
-        }
-        
-        // CRITICAL: Calculate distance based on contract time delta, matching raceSimulation.ts exactly
-        // This ensures all clients calculate the same distance at the same contract time
-        // Use the average speed over the contract time delta to calculate distance
-        // This matches the deterministic calculation in raceSimulation.ts (deltaTime = 0.1 per tick)
-        const averageSpeed = (racer.currentSpeed + adjustedSpeed) / 2;
-        let newDistance = racer.distance + averageSpeed * deltaTime;
-        let newLap = racer.lap;
-        
-        // CRITICAL: Prevent cars from going past 5 laps
-        // Check if racer is on FINAL lap (lap 5) and about to cross finish
-        // DO NOT detect winner here - winner is determined ONLY at RACE_DURATION_SECONDS
-        if (racer.lap === TOTAL_LAPS && newDistance >= totalLength) {
-          // STOP at finish line, don't increment lap or reset distance
-          newDistance = totalLength;
-          newLap = TOTAL_LAPS;
-        }
-        // Check for lap completion (only for laps 1-4)
-        else if (newDistance >= totalLength && racer.lap < TOTAL_LAPS) {
-          newLap = racer.lap + 1;
-          newDistance = newDistance - totalLength;
-        }
-        
-        // Safety: Ensure lap never exceeds TOTAL_LAPS
-        if (newLap > TOTAL_LAPS) {
-          newLap = TOTAL_LAPS;
-          newDistance = totalLength;
-        }
 
-        // Calculate new angle for this frame
+          return { 
+            ...racer, 
+            distance: newDistance,
+            lap: newLap,
+            currentSpeed: newSpeed,
+            targetSpeed: newTargetSpeed,
+            lastSpeedChange: newLastSpeedChange,
+            prevAngle: racer.prevAngle // Angle will be calculated after all ticks are processed
+          };
+        });
+      }
+      lastProcessedTickRef.current = targetTick; // Update last processed tick
+
+      // Calculate angles for visual rendering (after all ticks are processed)
+      updatedRacers = updatedRacers.map((racer, index) => {
         const laneOffset = (index - 1.5);
-        const posData = getPositionAndAngle(newDistance, laneOffset, racer.prevAngle);
-
-        return { 
-          ...racer, 
-          distance: newDistance,
-          lap: newLap,
-          currentSpeed: newSpeed,
-          targetSpeed: newTargetSpeed,
-          lastSpeedChange: newLastSpeedChange,
+        const posData = getPositionAndAngle(racer.distance, laneOffset, racer.prevAngle);
+        return {
+          ...racer,
           prevAngle: posData.angle
         };
       });
 
-      racersRef.current = updated;
-      setRacers([...updated]);
+      racersRef.current = updatedRacers;
+      setRacers([...updatedRacers]);
 
       // CRITICAL: ONLY determine winner when race time reaches RACE_DURATION_SECONDS
       // This ensures the winner matches the deterministic calculation in raceSimulation.ts
-      // DO NOT detect winner when cars cross the finish line early - wait for the full 30 seconds
-      // Use contractRaceTime (synchronized) to ensure all clients determine winner at same time
-      // This ensures deterministic winner determination across all clients
       if (contractRaceTime >= RACE_DURATION_SECONDS && !winnerFoundRef.current) {
-        // Calculate current positions after update - this is deterministic based on contract time
-        const currentRacerDistances = updated.map(r => ({
+        const finalRacersState = updatedRacers.map(r => ({
           id: r.id,
           totalDist: (r.lap - 1) * totalLength + r.distance
         })).sort((a, b) => {
-          // Sort by distance descending, but if distances are very close (within 1 unit),
-          // use ID as tiebreaker for deterministic ordering
           const distDiff = b.totalDist - a.totalDist;
           if (Math.abs(distDiff) < 1) {
-            return a.id - b.id; // Tiebreaker: lower ID wins
+            return a.id - b.id;
           }
           return distDiff;
         });
         
-        if (currentRacerDistances.length > 0) {
-          const winnerId = currentRacerDistances[0].id; // Highest distance = winner
-          const winnerRacer = updated.find(r => r.id === winnerId);
+        if (finalRacersState.length > 0) {
+          const winnerId = finalRacersState[0].id;
+          const winnerRacer = updatedRacers.find(r => r.id === winnerId);
           if (winnerRacer) {
             winnerFoundRef.current = true;
             const raceWinner = {
@@ -512,7 +451,7 @@ export default function RaceTrack({ raceState, countdown, preCountdown, onRaceEn
               distance: Math.min(winnerRacer.distance, totalLength),
               lap: Math.min(winnerRacer.lap, TOTAL_LAPS),
               finished: true,
-              finishTime: contractRaceTime, // Use contract time, not raceTimeRef
+              finishTime: contractRaceTime,
             };
             setWinner(raceWinner);
             setShowConfetti(true);
