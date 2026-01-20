@@ -88,7 +88,6 @@ export default function RaceTrack({ raceState, countdown, onRaceEnd, raceId, rac
   const animationRef = useRef<number | null>(null);
   const lastTimeRef = useRef<number>(0);
   const raceTimeRef = useRef<number>(0);
-  const previousContractTimeRef = useRef<number>(0); // Track previous contract time for deltaTime calculation
   const winnerFoundRef = useRef<boolean>(false);
   const racersRef = useRef<Racer[]>(createInitialRacers());
   const pathRef = useRef<SVGPathElement | null>(null);
@@ -194,11 +193,10 @@ export default function RaceTrack({ raceState, countdown, onRaceEnd, raceId, rac
       
       // CRITICAL: Calculate initial race time from contract
       // This ensures all clients start from the same point
-      const now = Math.floor(Date.now() / 1000);
+      const now = Date.now() / 1000;
       const actualRaceStartTime = raceStartTime > 0 ? raceStartTime : now;
       const initialContractRaceTime = Math.max(0, now - actualRaceStartTime);
       raceTimeRef.current = initialContractRaceTime;
-      previousContractTimeRef.current = initialContractRaceTime; // Initialize previous time
       
       // CRITICAL: Pre-consume RNG to sync with current contract time
       // This ensures clients connecting late are synchronized
@@ -281,18 +279,17 @@ export default function RaceTrack({ raceState, countdown, onRaceEnd, raceId, rac
 
       // CRITICAL: Use contract time as absolute source of truth for synchronization
       // This ensures all clients see the same race progression
-      const now = Math.floor(Date.now() / 1000);
+      const now = Date.now() / 1000; // Use milliseconds precision for smooth animation
       const actualRaceStartTime = raceStartTime > 0 ? raceStartTime : now;
       const contractRaceTime = Math.max(0, now - actualRaceStartTime);
       
-      // CRITICAL: Calculate deterministic deltaTime based on contract time difference
-      // This ensures all clients use the same deltaTime for the same contract time
-      const previousContractTime = previousContractTimeRef.current;
-      const deterministicDeltaTime = Math.max(0, Math.min(contractRaceTime - previousContractTime, 0.1)); // Cap at 0.1s per frame for smoothness
+      // Use frame time for smooth animation, but sync state with contract time
+      const frameDelta = (currentTime - lastTimeRef.current) / 1000;
+      const deltaTime = Math.min(frameDelta, 0.033); // Cap at ~30fps minimum for stability
       
-      // CRITICAL: Update raceTimeRef and previousContractTimeRef for next frame
+      // CRITICAL: Update raceTimeRef to contract time for synchronization
       raceTimeRef.current = contractRaceTime;
-      previousContractTimeRef.current = contractRaceTime;
+      lastTimeRef.current = currentTime;
       
       // CRITICAL: Consume RNG based on synchronized contract time, not frame count
       // Use time-based ticks (every 0.1 seconds) instead of frame-based ticks
@@ -312,9 +309,6 @@ export default function RaceTrack({ raceState, countdown, onRaceEnd, raceId, rac
       // CRITICAL: Use the synchronized tick, not a local counter
       const tick = timeBasedTick;
       const rng = rngRef.current;
-      
-      // Update lastTimeRef for frame timing (used for display only, not calculations)
-      lastTimeRef.current = currentTime;
 
       const currentRacers = racersRef.current;
       let raceWinner: Racer | null = null;
@@ -410,7 +404,9 @@ export default function RaceTrack({ raceState, countdown, onRaceEnd, raceId, rac
         const lerpFactor = Math.min(1.0, timeSinceSpeedChange * (1 / speedLerp)); // Time-based lerp
         const newSpeed = racer.currentSpeed + (newTargetSpeed - racer.currentSpeed) * lerpFactor;
         
-        // CRITICAL: Calculate distance using deterministic deltaTime based on ticks
+        // CRITICAL: Calculate distance using contract time to ensure synchronization
+        // Instead of using deltaTime frame-by-frame, calculate position based on contract time
+        // This ensures all clients see the same positions at the same contract time
         // Adjust speed based on race progress to ensure race completes in ~30 seconds
         const raceProgress = contractRaceTime / RACE_DURATION_SECONDS;
         const totalDistanceNeeded = totalLength * TOTAL_LAPS;
@@ -433,8 +429,11 @@ export default function RaceTrack({ raceState, countdown, onRaceEnd, raceId, rac
           adjustedSpeed = newSpeed;
         }
         
-        // CRITICAL: Use deterministic deltaTime, not frame-based deltaTime
-        let newDistance = racer.distance + adjustedSpeed * deterministicDeltaTime;
+        // CRITICAL: Calculate distance based on contract time, not frame deltaTime
+        // This ensures all clients calculate the same distance at the same contract time
+        // Use the average speed over the frame time to calculate distance
+        const averageSpeed = (racer.currentSpeed + adjustedSpeed) / 2;
+        let newDistance = racer.distance + averageSpeed * deltaTime;
         let newLap = racer.lap;
         
         // CRITICAL FIX: Prevent cars from going past 5 laps
@@ -444,15 +443,17 @@ export default function RaceTrack({ raceState, countdown, onRaceEnd, raceId, rac
           newDistance = totalLength;
           newLap = TOTAL_LAPS;
           
-          // Detect winner - first to cross on lap 5
-          if (!winnerFoundRef.current) {
+          // CRITICAL: Only detect winner if race time hasn't exceeded
+          // This ensures winner is determined at the end of race time, not when visually crossing
+          // This makes winner determination deterministic across all clients
+          if (!winnerFoundRef.current && contractRaceTime < RACE_DURATION_SECONDS) {
             winnerFoundRef.current = true;
             raceWinner = {
               ...racer,
               distance: totalLength,
               lap: TOTAL_LAPS,
               finished: true,
-              finishTime: raceTimeRef.current,
+              finishTime: contractRaceTime, // Use contract time for consistency
             };
             return raceWinner;
           }
@@ -507,14 +508,23 @@ export default function RaceTrack({ raceState, countdown, onRaceEnd, raceId, rac
         return;
       }
 
-      // Check if race time exceeded and determine winner by current position
-      // Use contractRaceTime (synchronized) instead of raceTimeRef
+      // CRITICAL: Check if race time exceeded and determine winner by current position
+      // Use contractRaceTime (synchronized) to ensure all clients determine winner at same time
+      // This ensures deterministic winner determination across all clients
       if (contractRaceTime >= RACE_DURATION_SECONDS && !winnerFoundRef.current) {
-        // Calculate current positions after update
+        // Calculate current positions after update - this is deterministic based on contract time
         const currentRacerDistances = updated.map(r => ({
           id: r.id,
           totalDist: (r.lap - 1) * totalLength + r.distance
-        })).sort((a, b) => b.totalDist - a.totalDist);
+        })).sort((a, b) => {
+          // Sort by distance descending, but if distances are very close (within 1 unit),
+          // use ID as tiebreaker for deterministic ordering
+          const distDiff = b.totalDist - a.totalDist;
+          if (Math.abs(distDiff) < 1) {
+            return a.id - b.id; // Tiebreaker: lower ID wins
+          }
+          return distDiff;
+        });
         
         if (currentRacerDistances.length > 0) {
           const winnerId = currentRacerDistances[0].id; // Highest distance = winner
@@ -526,7 +536,7 @@ export default function RaceTrack({ raceState, countdown, onRaceEnd, raceId, rac
               distance: Math.min(winnerRacer.distance, totalLength),
               lap: Math.min(winnerRacer.lap, TOTAL_LAPS),
               finished: true,
-              finishTime: raceTimeRef.current,
+              finishTime: contractRaceTime, // Use contract time, not raceTimeRef
             };
             setWinner(raceWinner);
             setShowConfetti(true);

@@ -377,9 +377,18 @@ export default function RacePage() {
       const raceEndTime = Number(raceInfo.raceEndTime);
       const startTime = Number(raceInfo.startTime);
       
-      // Verificar que la carrera existe y terminó
+      // CRITICAL: Verificar que la carrera existe y terminó
+      // Si startTime es 0, la carrera no ha sido inicializada (nadie ha apostado)
       if (startTime === 0 || raceEndTime === 0) {
-        // Carrera no inicializada - no finalizar
+        // Carrera no inicializada - no intentar finalizar
+        // Esto previene errores al intentar finalizar carreras que no existen
+        return;
+      }
+      
+      // CRITICAL: Verificar que la carrera realmente terminó
+      // Si raceEndTime es 0 o menor que startTime, la carrera no es válida
+      if (raceEndTime <= startTime) {
+        // Carrera con tiempos inválidos - no finalizar
         return;
       }
       
