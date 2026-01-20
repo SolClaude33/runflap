@@ -51,9 +51,9 @@ export function calculateRaceWinner(
     id,
     distance: 0,
     lap: 1,
-    baseSpeed: 450,
-    currentSpeed: 450,
-    targetSpeed: 450,
+    baseSpeed: 500, // Match RaceTrack.tsx base speed
+    currentSpeed: 500,
+    targetSpeed: 500,
     lastSpeedChange: 0,
     finished: false,
   }));
@@ -151,7 +151,7 @@ export function calculateRaceWinner(
       if (timeRemaining > 0 && distanceRemaining > 0 && !isFinalSeconds) {
         const requiredSpeed = distanceRemaining / timeRemaining;
         adjustedSpeed = newSpeed * 0.70 + requiredSpeed * 0.30;
-        adjustedSpeed = Math.max(350, Math.min(700, adjustedSpeed));
+        adjustedSpeed = Math.max(400, Math.min(700, adjustedSpeed)); // Increased min to 400 for better completion
       } else if (isFinalSeconds) {
         adjustedSpeed = newSpeed;
       }

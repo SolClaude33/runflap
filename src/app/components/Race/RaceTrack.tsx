@@ -64,8 +64,8 @@ const createInitialRacers = (seed: number = 0): Racer[] => {
   ].map((r) => {
     // Base speed calculated to complete 5 laps in ~30 seconds
     // Circuit length ~1966 units: 5 laps = 9830 units / 30s = ~328 units/sec average
-    // Using higher base speed (450) to ensure race completes in time with variations
-    const baseSpeed = 450; // Increased from 400 to ensure race completes
+    // Using higher base speed (500) to ensure race completes in time with variations
+    const baseSpeed = 500; // Increased to ensure race completes all 5 laps
     return {
       ...r,
       distance: 0,
@@ -349,63 +349,30 @@ export default function RaceTrack({ raceState, countdown, preCountdown, onRaceEn
             const distanceBehind = leaderDist - racerTotalDist;
             const timeRemaining = RACE_DURATION_SECONDS - tickContractTime;
             const isFinalSeconds = timeRemaining <= 5;
-            const isLastTwoLaps = racer.lap >= 4; // Last 2 laps (lap 4 and 5)
             
-            // EMOTIONAL RACING: First 3 laps are fair and competitive
-            // Last 2 laps: calculated winner gets advantage to ensure visual victory
-            if (calculatedWinner && isLastTwoLaps) {
-              // In last 2 laps, give calculated winner a boost to ensure they win visually
-              if (racer.id === calculatedWinner) {
-                // Winner gets progressive boost: stronger in lap 5, moderate in lap 4
-                const lapProgress = racer.lap === TOTAL_LAPS ? 1.0 : (racer.distance / totalLength);
-                const winnerBoost = racer.lap === TOTAL_LAPS 
-                  ? 1.15 + rngRef.current() * 0.10 // 15-25% boost on final lap
-                  : 1.10 + rngRef.current() * 0.05; // 10-15% boost on lap 4
-                newTargetSpeed *= winnerBoost;
-              } else {
-                // Non-winners get slightly reduced catch-up in last 2 laps
-                if (distanceBehind > 0 && position > 1 && !isFinalSeconds) {
-                  const minimalCatchUp = Math.min(0.03, (distanceBehind / totalLength) * 0.05);
-                  newTargetSpeed *= (1 + minimalCatchUp);
-                }
-              }
-            } else {
-              // First 3 laps: Fair competition for everyone
-              if (distanceBehind > 0 && position > 1 && !isFinalSeconds) {
-                const catchUpBoost = Math.min(0.06, (distanceBehind / totalLength) * 0.10);
-                newTargetSpeed *= (1 + catchUpBoost);
-              }
-              
-              if (isFinalSeconds && position > 1) {
-                const minimalCatchUp = Math.min(0.02, (distanceBehind / totalLength) * 0.05);
-                newTargetSpeed *= (1 + minimalCatchUp);
-              }
+            // CRITICAL: Keep logic deterministic - NO modifications based on calculatedWinner
+            // The visual boost will be applied only in the visual interpolation layer
+            if (distanceBehind > 0 && position > 1 && !isFinalSeconds) {
+              const catchUpBoost = Math.min(0.06, (distanceBehind / totalLength) * 0.10);
+              newTargetSpeed *= (1 + catchUpBoost);
+            }
+            
+            if (isFinalSeconds && position > 1) {
+              const minimalCatchUp = Math.min(0.02, (distanceBehind / totalLength) * 0.05);
+              newTargetSpeed *= (1 + minimalCatchUp);
             }
             
             if (position === 1 && (leaderDist - lastPlaceDist) > totalLength * 0.15) {
-              // In first 3 laps, slow down leader if too far ahead (fair competition)
-              // In last 2 laps, don't slow down calculated winner
-              if (!calculatedWinner || !isLastTwoLaps || racer.id !== calculatedWinner) {
-                newTargetSpeed *= 0.90;
-              }
+              newTargetSpeed *= 0.90;
             }
             
             const raceProgress = (racer.lap - 1 + racer.distance / totalLength) / TOTAL_LAPS;
             if (racer.lap === TOTAL_LAPS && position > 1) {
-              // Final lap boost for everyone, but extra for calculated winner
-              if (calculatedWinner && racer.id === calculatedWinner) {
-                newTargetSpeed *= 1.25 + rngRef.current() * 0.10; // Extra boost for winner on final lap
-              } else {
-                newTargetSpeed *= 1.15 + rngRef.current() * 0.10;
-              }
+              newTargetSpeed *= 1.15 + rngRef.current() * 0.10;
             }
             
             if (raceProgress > 0.45 && raceProgress < 0.55) {
-              // Mid-race slowdown applies to everyone in first 3 laps
-              // In last 2 laps, don't slow down calculated winner
-              if (!calculatedWinner || !isLastTwoLaps || racer.id !== calculatedWinner) {
-                newTargetSpeed *= 0.85 + rngRef.current() * 0.30;
-              }
+              newTargetSpeed *= 0.85 + rngRef.current() * 0.30;
             }
             
             newTargetSpeed = Math.max(300, Math.min(650, newTargetSpeed));
@@ -422,29 +389,15 @@ export default function RaceTrack({ raceState, countdown, preCountdown, onRaceEn
           const timeRemaining = Math.max(0.1, RACE_DURATION_SECONDS - tickContractTime);
           
           const isFinalSeconds = timeRemaining <= 5;
-          const isLastTwoLaps = racer.lap >= 4; // Last 2 laps
           let adjustedSpeed = newSpeed;
           
-          // Speed adjustments: Fair in first 3 laps, winner advantage in last 2 laps
-          if (calculatedWinner && isLastTwoLaps && racer.id === calculatedWinner) {
-            // Winner gets priority in speed adjustments in last 2 laps to maintain lead
-            if (timeRemaining > 0 && distanceRemaining > 0 && !isFinalSeconds) {
-              const requiredSpeed = distanceRemaining / timeRemaining;
-              // Winner uses more of their natural speed (80% vs 70% for others)
-              adjustedSpeed = newSpeed * 0.80 + requiredSpeed * 0.20;
-              adjustedSpeed = Math.max(400, Math.min(700, adjustedSpeed)); // Higher min for winner
-            } else if (isFinalSeconds) {
-              adjustedSpeed = newSpeed;
-            }
-          } else {
-            // Standard speed adjustment for everyone in first 3 laps, and non-winners in last 2
-            if (timeRemaining > 0 && distanceRemaining > 0 && !isFinalSeconds) {
-              const requiredSpeed = distanceRemaining / timeRemaining;
-              adjustedSpeed = newSpeed * 0.70 + requiredSpeed * 0.30;
-              adjustedSpeed = Math.max(350, Math.min(700, adjustedSpeed));
-            } else if (isFinalSeconds) {
-              adjustedSpeed = newSpeed;
-            }
+          // CRITICAL: Keep speed adjustments deterministic (no winner bias in logic)
+          if (timeRemaining > 0 && distanceRemaining > 0 && !isFinalSeconds) {
+            const requiredSpeed = distanceRemaining / timeRemaining;
+            adjustedSpeed = newSpeed * 0.70 + requiredSpeed * 0.30;
+            adjustedSpeed = Math.max(400, Math.min(700, adjustedSpeed)); // Increased min to 400 for better completion
+          } else if (isFinalSeconds) {
+            adjustedSpeed = newSpeed;
           }
           
           let newDistance = racer.distance + adjustedSpeed * tickDeltaTime;
@@ -483,6 +436,7 @@ export default function RaceTrack({ raceState, countdown, preCountdown, onRaceEn
       const visualDeltaTime = Math.min(frameDelta, 0.1); // Cap at 0.1s for stability
       
       // Apply smooth visual interpolation for movement (only affects rendering, not logic)
+      // In last 2 laps, give calculated winner a visual boost to ensure they win visually
       updatedRacers = updatedRacers.map((racer, index) => {
         if (racer.finished) {
           return {
@@ -492,8 +446,21 @@ export default function RaceTrack({ raceState, countdown, preCountdown, onRaceEn
           };
         }
         
-        // Use current speed for smooth visual interpolation between ticks
-        const visualDistance = racer.distance + racer.currentSpeed * visualDeltaTime;
+        // Calculate base visual speed
+        let visualSpeed = racer.currentSpeed;
+        
+        // Apply visual boost to calculated winner in last 2 laps (visual only, doesn't affect logic)
+        const isLastTwoLaps = racer.lap >= 4;
+        if (calculatedWinner && isLastTwoLaps && racer.id === calculatedWinner) {
+          // Winner gets visual boost: 10-15% in lap 4, 15-25% in lap 5
+          const winnerVisualBoost = racer.lap === TOTAL_LAPS 
+            ? 1.15 + (Math.random() * 0.10) // 15-25% boost on final lap
+            : 1.10 + (Math.random() * 0.05); // 10-15% boost on lap 4
+          visualSpeed *= winnerVisualBoost;
+        }
+        
+        // Use visual speed for smooth visual interpolation between ticks
+        const visualDistance = racer.distance + visualSpeed * visualDeltaTime;
         const visualLap = visualDistance >= totalLength && racer.lap < TOTAL_LAPS 
           ? racer.lap + 1 
           : racer.lap;
