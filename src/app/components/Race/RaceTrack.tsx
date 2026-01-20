@@ -28,6 +28,7 @@ const TOTAL_LAPS = 5;
 interface RaceTrackProps {
   raceState: 'betting' | 'pre_countdown' | 'countdown' | 'racing' | 'finished';
   countdown: number | null;
+  preCountdown?: number | null; // Pre-countdown timer (5 seconds before race starts)
   onRaceEnd: (winner: number) => void;
   raceId: number; // ID de la carrera para seed determinístico
   raceStartTime: number; // Timestamp del contrato cuando empieza la carrera (Unix timestamp)
@@ -76,7 +77,7 @@ const createInitialRacers = (seed: number = 0): Racer[] => {
   });
 };
 
-export default function RaceTrack({ raceState, countdown, onRaceEnd, raceId, raceStartTime, raceSeed }: RaceTrackProps) {
+export default function RaceTrack({ raceState, countdown, preCountdown, onRaceEnd, raceId, raceStartTime, raceSeed }: RaceTrackProps) {
   const [racers, setRacers] = useState<Racer[]>(createInitialRacers());
   const [winner, setWinner] = useState<Racer | null>(null);
   const [totalLength, setTotalLength] = useState<number>(0);
@@ -88,6 +89,8 @@ export default function RaceTrack({ raceState, countdown, onRaceEnd, raceId, rac
   const animationRef = useRef<number | null>(null);
   const lastTimeRef = useRef<number>(0);
   const raceTimeRef = useRef<number>(0);
+  const previousContractTimeRef = useRef<number>(0); // Track previous contract time for deterministic deltaTime
+  const lastProcessedTickRef = useRef<number>(0); // Track last processed tick to ensure we process all ticks
   const winnerFoundRef = useRef<boolean>(false);
   const racersRef = useRef<Racer[]>(createInitialRacers());
   const pathRef = useRef<SVGPathElement | null>(null);
@@ -197,6 +200,7 @@ export default function RaceTrack({ raceState, countdown, onRaceEnd, raceId, rac
       const actualRaceStartTime = raceStartTime > 0 ? raceStartTime : now;
       const initialContractRaceTime = Math.max(0, now - actualRaceStartTime);
       raceTimeRef.current = initialContractRaceTime;
+      previousContractTimeRef.current = initialContractRaceTime; // Initialize previous contract time for deterministic deltaTime
       
       // CRITICAL: Pre-consume RNG to sync with current contract time
       // This ensures clients connecting late are synchronized
@@ -209,6 +213,7 @@ export default function RaceTrack({ raceState, countdown, onRaceEnd, raceId, rac
         rngRef.current(); // Consume RNG without using the value
       }
       tickCounterRef.current = maxPreConsume;
+      lastProcessedTickRef.current = maxPreConsume; // Initialize last processed tick
       
       setRacersReady(true);
     }
@@ -283,9 +288,11 @@ export default function RaceTrack({ raceState, countdown, onRaceEnd, raceId, rac
       const actualRaceStartTime = raceStartTime > 0 ? raceStartTime : now;
       const contractRaceTime = Math.max(0, now - actualRaceStartTime);
       
-      // Use frame time for smooth animation, but sync state with contract time
-      const frameDelta = (currentTime - lastTimeRef.current) / 1000;
-      const deltaTime = Math.min(frameDelta, 0.033); // Cap at ~30fps minimum for stability
+      // CRITICAL: Calculate deltaTime based on contract time, not frame time
+      // This ensures deterministic distance calculations matching raceSimulation.ts
+      const contractDeltaTime = contractRaceTime - previousContractTimeRef.current;
+      const deltaTime = Math.max(0, Math.min(contractDeltaTime, 0.1)); // Cap at 0.1s (1 tick) for stability
+      previousContractTimeRef.current = contractRaceTime; // Update for next frame
       
       // CRITICAL: Update raceTimeRef to contract time for synchronization
       raceTimeRef.current = contractRaceTime;
@@ -429,34 +436,21 @@ export default function RaceTrack({ raceState, countdown, onRaceEnd, raceId, rac
           adjustedSpeed = newSpeed;
         }
         
-        // CRITICAL: Calculate distance based on contract time, not frame deltaTime
+        // CRITICAL: Calculate distance based on contract time delta, matching raceSimulation.ts exactly
         // This ensures all clients calculate the same distance at the same contract time
-        // Use the average speed over the frame time to calculate distance
+        // Use the average speed over the contract time delta to calculate distance
+        // This matches the deterministic calculation in raceSimulation.ts (deltaTime = 0.1 per tick)
         const averageSpeed = (racer.currentSpeed + adjustedSpeed) / 2;
         let newDistance = racer.distance + averageSpeed * deltaTime;
         let newLap = racer.lap;
         
-        // CRITICAL FIX: Prevent cars from going past 5 laps
+        // CRITICAL: Prevent cars from going past 5 laps
         // Check if racer is on FINAL lap (lap 5) and about to cross finish
+        // DO NOT detect winner here - winner is determined ONLY at RACE_DURATION_SECONDS
         if (racer.lap === TOTAL_LAPS && newDistance >= totalLength) {
           // STOP at finish line, don't increment lap or reset distance
           newDistance = totalLength;
           newLap = TOTAL_LAPS;
-          
-          // CRITICAL: Only detect winner if race time hasn't exceeded
-          // This ensures winner is determined at the end of race time, not when visually crossing
-          // This makes winner determination deterministic across all clients
-          if (!winnerFoundRef.current && contractRaceTime < RACE_DURATION_SECONDS) {
-            winnerFoundRef.current = true;
-            raceWinner = {
-              ...racer,
-              distance: totalLength,
-              lap: TOTAL_LAPS,
-              finished: true,
-              finishTime: contractRaceTime, // Use contract time for consistency
-            };
-            return raceWinner;
-          }
         }
         // Check for lap completion (only for laps 1-4)
         else if (newDistance >= totalLength && racer.lap < TOTAL_LAPS) {
@@ -488,27 +482,9 @@ export default function RaceTrack({ raceState, countdown, onRaceEnd, raceId, rac
       racersRef.current = updated;
       setRacers([...updated]);
 
-      // Check for winner after updating positions
-      if (raceWinner) {
-        // Stop animation immediately
-        if (animationRef.current) {
-          cancelAnimationFrame(animationRef.current);
-          animationRef.current = null;
-        }
-        
-        // Set winner and trigger celebration
-        setWinner(raceWinner);
-        setShowConfetti(true);
-        setShowCelebration(true);
-        
-        // Call onRaceEnd to update parent component
-        onRaceEnd(raceWinner.id);
-        
-        console.log(`🏁 Race finished! Winner: ${raceWinner.name} (Car ${raceWinner.id})`);
-        return;
-      }
-
-      // CRITICAL: Check if race time exceeded and determine winner by current position
+      // CRITICAL: ONLY determine winner when race time reaches RACE_DURATION_SECONDS
+      // This ensures the winner matches the deterministic calculation in raceSimulation.ts
+      // DO NOT detect winner when cars cross the finish line early - wait for the full 30 seconds
       // Use contractRaceTime (synchronized) to ensure all clients determine winner at same time
       // This ensures deterministic winner determination across all clients
       if (contractRaceTime >= RACE_DURATION_SECONDS && !winnerFoundRef.current) {
@@ -968,7 +944,15 @@ export default function RaceTrack({ raceState, countdown, onRaceEnd, raceId, rac
         })}
       </svg>
 
-      {/* Race countdown overlay - only show during countdown phase, not during racing */}
+      {/* Race countdown overlay - show during pre_countdown and countdown phases */}
+      {raceState === 'pre_countdown' && preCountdown !== null && preCountdown > 0 && (
+        <div className="absolute inset-0 flex items-center justify-center bg-black/50">
+          <div className="text-8xl font-bold text-white animate-pulse">
+            {preCountdown}
+          </div>
+        </div>
+      )}
+      
       {raceState === 'countdown' && countdown !== null && countdown > 0 && (
         <div className="absolute inset-0 flex items-center justify-center bg-black/50">
           <div className="text-8xl font-bold text-white animate-pulse">
@@ -977,7 +961,7 @@ export default function RaceTrack({ raceState, countdown, onRaceEnd, raceId, rac
         </div>
       )}
 
-      {raceState === 'countdown' && countdown === 0 && (
+      {(raceState === 'pre_countdown' || raceState === 'countdown') && ((preCountdown !== null && preCountdown === 0) || (countdown !== null && countdown === 0)) && (
         <div className="absolute inset-0 flex items-center justify-center bg-black/50">
           <div className="text-8xl font-bold text-green-400 animate-pulse">
             GO!

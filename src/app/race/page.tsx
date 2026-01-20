@@ -63,6 +63,7 @@ export default function RacePage() {
   const [carStats, setCarStats] = useState<CarStats | null>(null);
   const [raceStats, setRaceStats] = useState<RaceStats | null>(null);
   const [raceSeedData, setRaceSeedData] = useState<{ seed: number; generated: boolean } | null>(null);
+  const [calculatedWinner, setCalculatedWinner] = useState<number | null>(null); // Winner calculated from seed (available before race starts)
   const [showProfileModal, setShowProfileModal] = useState(false);
   const [showHelpModal, setShowHelpModal] = useState(false);
   const [lastWinner, setLastWinner] = useState<number | null>(null);
@@ -134,6 +135,7 @@ export default function RacePage() {
           winnerDetectedRef.current.delete(raceNumber); // Clear old race
           finalizingRaceRef.current.delete(raceNumber); // Clear old race finalization
           verifiedFinalizedRef.current.delete(raceNumber); // Clear old race verification
+          setCalculatedWinner(null); // Clear calculated winner for new race
           
           // Si cambió la carrera, obtener info de la carrera anterior
           if (currentRace > 0 && raceNumber > 0) {
@@ -271,7 +273,22 @@ export default function RacePage() {
             
             if (contractSeed.generated && contractSeed.seed !== 0) {
               console.log(`[Race ${currentRace}] ✅ Using contract seed: ${contractSeed.seed}`);
+              
+              // CRITICAL: Calculate winner immediately when seed is available
+              // This happens after betting ends, during the 5-second countdown
+              // All clients will know who will win before the race starts visually
+              try {
+                const CIRCUIT_LENGTH = 1966.32;
+                const winner = calculateRaceWinner(contractSeed.seed, CIRCUIT_LENGTH);
+                setCalculatedWinner(winner);
+                console.log(`[Race ${currentRace}] 🏆 Winner calculated from seed: Car ${winner} (available before race starts)`);
+              } catch (calcError: any) {
+                console.error(`[Race ${currentRace}] Error calculating winner from seed:`, calcError);
+                setCalculatedWinner(null);
+              }
             } else {
+              // Seed not generated yet - clear calculated winner
+              setCalculatedWinner(null);
               console.log(`[Race ${currentRace}] ⏳ Seed not generated yet, triggering backend generation...`);
               
               // CRITICAL: Trigger seed generation via backend API (no MetaMask popup)
@@ -298,6 +315,16 @@ export default function RacePage() {
                           generated: newSeed.generated,
                         });
                         console.log(`[Race ${currentRace}] ✅ Seed now available: ${newSeed.seed}`);
+                        
+                        // Calculate winner when seed becomes available
+                        try {
+                          const CIRCUIT_LENGTH = 1966.32;
+                          const winner = calculateRaceWinner(newSeed.seed, CIRCUIT_LENGTH);
+                          setCalculatedWinner(winner);
+                          console.log(`[Race ${currentRace}] 🏆 Winner calculated from seed: Car ${winner}`);
+                        } catch (calcError: any) {
+                          console.error(`[Race ${currentRace}] Error calculating winner:`, calcError);
+                        }
                       }
                     } catch (error) {
                       // Silently retry later
@@ -313,14 +340,17 @@ export default function RacePage() {
             }
           } else {
             setRaceSeedData(null);
+            setCalculatedWinner(null); // Clear winner if seed not available
           }
         } catch (error) {
           // Silenciar errores de seed no disponible (es normal antes de que empiece la carrera)
           setRaceSeedData(null);
+          setCalculatedWinner(null);
         }
       } else {
         // Si las apuestas aún no se cierran, no hay seed disponible
         setRaceSeedData(null);
+        setCalculatedWinner(null);
       }
 
       // Obtener apuesta del usuario (no crítico)
@@ -645,50 +675,51 @@ export default function RacePage() {
   }, [signer, isOwner, provider]);
 
   const handleRaceEnd = useCallback(async (winnerId: number) => {
-    // CRITICAL: Calculate the winner deterministically from the seed
-    // This ensures the frontend and backend always agree on the winner
-    // The circuit length is approximately 1966.32 units (from RaceTrack.tsx)
+    // CRITICAL: Use the pre-calculated winner if available (calculated when seed was generated)
+    // This winner was determined BEFORE the race started visually, ensuring perfect consistency
+    // If calculatedWinner is not available, fall back to calculating it now
     const CIRCUIT_LENGTH = 1966.32;
-    let calculatedWinner = winnerId;
+    let finalWinner = calculatedWinner;
     
-    if (raceSeedData && raceSeedData.generated && raceSeedData.seed !== 0 && raceInfo) {
-      try {
-        calculatedWinner = calculateRaceWinner(raceSeedData.seed, CIRCUIT_LENGTH);
-        console.log(`[Race ${raceNumber}] ✅ Calculated winner from seed: Car ${calculatedWinner} (visual: Car ${winnerId})`);
-        
-        // If visual winner doesn't match calculated winner, use calculated one
-        // This ensures the contract always has the correct winner
-        if (calculatedWinner !== winnerId) {
-          console.warn(`[Race ${raceNumber}] ⚠️ Winner mismatch! Visual: Car ${winnerId}, Calculated: Car ${calculatedWinner}. Using calculated winner to ensure contract consistency.`);
-          calculatedWinner = calculatedWinner; // Use calculated winner
-        } else {
-          console.log(`[Race ${raceNumber}] ✅ Visual winner matches calculated winner: Car ${calculatedWinner}`);
+    if (finalWinner === null) {
+      // Calculate winner if not already calculated (shouldn't happen, but fallback)
+      if (raceSeedData && raceSeedData.generated && raceSeedData.seed !== 0) {
+        try {
+          finalWinner = calculateRaceWinner(raceSeedData.seed, CIRCUIT_LENGTH);
+          console.log(`[Race ${raceNumber}] ✅ Winner calculated from seed: Car ${finalWinner} (visual: Car ${winnerId})`);
+        } catch (calcError: any) {
+          console.error(`[Race ${raceNumber}] Error calculating winner:`, calcError);
+          finalWinner = winnerId; // Fallback to visual winner
         }
-      } catch (calcError: any) {
-        console.error(`[Race ${raceNumber}] Error calculating winner from seed:`, calcError);
-        // Fall back to visual winner if calculation fails
-        console.log(`[Race ${raceNumber}] Using visual winner: Car ${winnerId}`);
+      } else {
+        console.warn(`[Race ${raceNumber}] ⚠️ Seed not available, using visual winner: Car ${winnerId}`);
+        finalWinner = winnerId;
       }
     } else {
-      console.warn(`[Race ${raceNumber}] ⚠️ Seed not available, using visual winner: Car ${winnerId}`);
+      // Use pre-calculated winner (determined before race started)
+      console.log(`[Race ${raceNumber}] ✅ Using pre-calculated winner: Car ${finalWinner} (visual: Car ${winnerId})`);
+      
+      // Verify visual winner matches (should always match if simulation is correct)
+      if (finalWinner !== winnerId) {
+        console.warn(`[Race ${raceNumber}] ⚠️ Visual winner (Car ${winnerId}) doesn't match pre-calculated winner (Car ${finalWinner}). Using pre-calculated winner.`);
+      }
     }
     
-    // CRITICAL: Store the calculated winner (or visual if seed not available)
-    // If a different winner is detected later, log a warning but use the first one
+    // CRITICAL: Store the final winner (pre-calculated from seed)
+    // This winner was determined BEFORE the race started, ensuring perfect consistency
     if (!winnerDetectedRef.current.has(raceNumber)) {
-      winnerDetectedRef.current.set(raceNumber, calculatedWinner);
-      console.log(`[Race ${raceNumber}] First winner determined: Car ${calculatedWinner}`);
+      winnerDetectedRef.current.set(raceNumber, finalWinner);
+      console.log(`[Race ${raceNumber}] Winner determined (pre-calculated from seed): Car ${finalWinner}`);
     } else {
-      const firstWinner = winnerDetectedRef.current.get(raceNumber);
-      if (firstWinner !== calculatedWinner) {
-        console.warn(`[Race ${raceNumber}] Winner mismatch! First determined: Car ${firstWinner}, New: Car ${calculatedWinner}. Using first winner.`);
-        // Use the first determined winner to ensure consistency
-        calculatedWinner = firstWinner;
+      const storedWinner = winnerDetectedRef.current.get(raceNumber);
+      if (storedWinner !== finalWinner) {
+        console.warn(`[Race ${raceNumber}] Winner mismatch! Stored: Car ${storedWinner}, New: Car ${finalWinner}. Using stored winner.`);
+        finalWinner = storedWinner!;
       }
     }
     
     setRaceState('finished');
-    setLastWinner(calculatedWinner);
+    setLastWinner(finalWinner);
     
     // Finalizar la carrera en el contrato automáticamente
     // Esperar a que el contrato realmente termine antes de intentar finalizar
@@ -701,9 +732,8 @@ export default function RacePage() {
 
       finalizingRaceRef.current.add(raceNumber);
       
-      // Use the calculated winner to ensure consistency with backend
-      const finalWinner = calculatedWinner;
-      console.log(`[Race ${raceNumber}] Finalizing with calculated winner: Car ${finalWinner}`);
+      // Use the pre-calculated winner (determined from seed before race started)
+      console.log(`[Race ${raceNumber}] Finalizing with pre-calculated winner: Car ${finalWinner}`);
 
       const raceEndTime = Number(raceInfo.raceEndTime);
       const now = Math.floor(Date.now() / 1000);
@@ -1254,6 +1284,7 @@ export default function RacePage() {
               <RaceTrack 
                 raceState={raceState}
                 countdown={countdown}
+                preCountdown={preCountdown}
                 onRaceEnd={handleRaceEnd}
                 raceId={raceNumber}
                 raceStartTime={raceInfo ? Number(raceInfo.bettingEndTime) + PRE_COUNTDOWN_DURATION : 0}

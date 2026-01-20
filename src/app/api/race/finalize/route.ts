@@ -58,7 +58,28 @@ export async function POST(request: NextRequest) {
     const contract = new ethers.Contract(CONTRACT_ADDRESS, FLAPRACE_ABI, wallet);
 
     // Verificar que la carrera existe y no está finalizada
-    let raceInfo = await contract.getRaceInfo(raceId);
+    let raceInfo;
+    try {
+      raceInfo = await contract.getRaceInfo(raceId);
+    } catch (error: any) {
+      // Check if race doesn't exist (startTime = 0 means uninitialized)
+      if (error.message?.includes('Race does not exist') || error.reason?.includes('Race does not exist')) {
+        return NextResponse.json(
+          { success: false, error: 'Race does not exist or not initialized' },
+          { status: 400 }
+        );
+      }
+      throw error; // Re-throw if it's a different error
+    }
+    
+    // Check if race is initialized (startTime > 0)
+    if (Number(raceInfo.startTime) === 0) {
+      return NextResponse.json(
+        { success: false, error: 'Race not initialized yet' },
+        { status: 400 }
+      );
+    }
+    
     if (raceInfo.finalized) {
       return NextResponse.json(
         { success: false, error: 'Race already finalized' },
