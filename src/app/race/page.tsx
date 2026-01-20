@@ -321,18 +321,34 @@ export default function RacePage() {
 
   // Verificar y finalizar carreras que ya terminaron pero no se finalizaron
   useEffect(() => {
-    if (!provider || !raceInfo || raceInfo.finalized) return;
+    if (!provider || !raceInfo) {
+      return;
+    }
+
+    if (raceInfo.finalized) {
+      console.log(`[Auto-Finalize] Race ${raceNumber} already finalized, skipping check.`);
+      return;
+    }
 
     const checkAndFinalize = async () => {
       const now = Math.floor(Date.now() / 1000);
       const raceEndTime = Number(raceInfo.raceEndTime);
+      const startTime = Number(raceInfo.startTime);
+      
+      // Verificar que la carrera existe y terminó
+      if (startTime === 0 || raceEndTime === 0) {
+        // Carrera no inicializada - no finalizar
+        return;
+      }
       
       // Si la carrera terminó hace más de 5 segundos pero no está finalizada
-      if (raceEndTime > 0 && now > raceEndTime + 5 && !raceInfo.finalized) {
-        console.log(`[Race ${raceNumber}] ⚠️ Race ended ${now - raceEndTime}s ago but not finalized. Attempting auto-finalize...`);
+      if (now > raceEndTime + 5 && !raceInfo.finalized) {
+        const timeSinceEnd = now - raceEndTime;
+        console.log(`[Auto-Finalize] Race ${raceNumber} ended ${timeSinceEnd}s ago but not finalized. Attempting auto-finalize...`);
         
         // Prevenir intentos duplicados
         if (finalizingRaceRef.current.has(raceNumber)) {
+          console.log(`[Auto-Finalize] Race ${raceNumber} already being finalized, skipping...`);
           return;
         }
 
@@ -341,6 +357,7 @@ export default function RacePage() {
         try {
           // Intentar finalizar con el ganador detectado, o usar ganador 1 como fallback
           const detectedWinner = winnerDetectedRef.current.get(raceNumber) || 1;
+          console.log(`[Auto-Finalize] Calling /api/race/finalize with raceId=${raceNumber}, winner=${detectedWinner}`);
           
           const response = await fetch('/api/race/finalize', {
             method: 'POST',
@@ -355,21 +372,24 @@ export default function RacePage() {
 
           const result = await response.json();
           if (result.success) {
-            console.log(`[Race ${raceNumber}] ✅ Auto-finalized. Winner: Car ${detectedWinner}. TX: ${result.txHash}`);
+            console.log(`[Auto-Finalize] ✅ Race ${raceNumber} auto-finalized successfully. Winner: Car ${detectedWinner}. TX: ${result.txHash}`);
             finalizingRaceRef.current.delete(raceNumber);
             // Recargar datos después de finalizar
             setTimeout(() => fetchRaceData(), 2000);
           } else {
-            console.error(`[Race ${raceNumber}] ❌ Auto-finalize failed:`, result.error);
+            console.error(`[Auto-Finalize] ❌ Race ${raceNumber} auto-finalize failed:`, result.error);
             finalizingRaceRef.current.delete(raceNumber);
           }
-        } catch (error) {
-          console.error(`[Race ${raceNumber}] ❌ Auto-finalize error:`, error);
+        } catch (error: any) {
+          console.error(`[Auto-Finalize] ❌ Race ${raceNumber} auto-finalize error:`, error.message || error);
           finalizingRaceRef.current.delete(raceNumber);
         }
       }
     };
 
+    // Ejecutar inmediatamente la primera vez
+    checkAndFinalize();
+    
     // Verificar cada 10 segundos si hay carreras pendientes de finalizar
     const checkInterval = setInterval(checkAndFinalize, 10000);
     return () => clearInterval(checkInterval);
