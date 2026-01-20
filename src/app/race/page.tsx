@@ -75,6 +75,7 @@ export default function RacePage() {
   const [preCountdown, setPreCountdown] = useState<number | null>(null);
   const finalizingRaceRef = useRef<Set<number>>(new Set()); // Track races being finalized to prevent duplicates
   const winnerDetectedRef = useRef<Map<number, number>>(new Map()); // Track detected winner per race to ensure consistency
+  const verifiedFinalizedRef = useRef<Set<number>>(new Set()); // Track races verified as finalized to prevent re-checks
   
   // Guardar timestamps del contrato para countdown local suave
   const contractTimestampsRef = useRef<{
@@ -131,6 +132,7 @@ export default function RacePage() {
         if (currentRace !== raceNumber) {
           winnerDetectedRef.current.delete(raceNumber); // Clear old race
           finalizingRaceRef.current.delete(raceNumber); // Clear old race finalization
+          verifiedFinalizedRef.current.delete(raceNumber); // Clear old race verification
           
           // Si cambió la carrera, obtener info de la carrera anterior
           if (currentRace > 0 && raceNumber > 0) {
@@ -326,7 +328,14 @@ export default function RacePage() {
     }
 
     if (raceInfo.finalized) {
+      // Limpiar el ref cuando el estado se actualiza correctamente
+      verifiedFinalizedRef.current.delete(raceNumber);
       console.log(`[Auto-Finalize] Race ${raceNumber} already finalized, skipping check.`);
+      return;
+    }
+
+    // Si ya verificamos que esta carrera está finalizada en el contrato, esperar a que el estado se actualice
+    if (verifiedFinalizedRef.current.has(raceNumber)) {
       return;
     }
 
@@ -350,6 +359,8 @@ export default function RacePage() {
             const contractInfo = await getRaceInfo(provider, raceNumber);
             if (contractInfo && contractInfo.finalized) {
               // El contrato dice que ya está finalizada, pero nuestro estado local no
+              // Marcar como verificado para evitar verificaciones repetidas
+              verifiedFinalizedRef.current.add(raceNumber);
               // Forzar actualización inmediata
               console.log(`[Auto-Finalize] Race ${raceNumber} already finalized on-chain but state not updated. Forcing refresh...`);
               setTimeout(() => fetchRaceData(), 100);
@@ -398,6 +409,8 @@ export default function RacePage() {
             // Si el error es "already finalized", forzar recarga para actualizar estado
             if (result.error && result.error.includes('already finalized')) {
               console.log(`[Auto-Finalize] Race ${raceNumber} already finalized on-chain. Forcing state update...`);
+              // Marcar como verificado para evitar verificaciones repetidas
+              verifiedFinalizedRef.current.add(raceNumber);
               finalizingRaceRef.current.delete(raceNumber);
               // Recargar inmediatamente para actualizar el estado
               setTimeout(() => fetchRaceData(), 500);
