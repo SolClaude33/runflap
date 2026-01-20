@@ -40,3 +40,7 @@ yarn-error.log*
 next-env.d.ts
 attached_assets/*.mp4
 attached_assets/*.pdf
+
+# documentation - temporary notes (keep README.md)
+*.md
+!README.md
