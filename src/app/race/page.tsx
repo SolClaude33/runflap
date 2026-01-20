@@ -182,6 +182,7 @@ export default function RacePage() {
           if (startTime === 0 || bettingEndTime === 0) {
             // Carrera no inicializada - está lista para que alguien apueste
             // La carrera se inicializará automáticamente cuando alguien apueste
+            console.log(`[Race ${currentRace}] 🔄 Race not initialized (startTime: ${startTime}, bettingEndTime: ${bettingEndTime}). Setting state to BETTING.`);
             setRaceState('betting');
             // No hay timer porque la carrera empezará cuando alguien apueste
             setBettingTimer(BETTING_TIME);
@@ -191,17 +192,22 @@ export default function RacePage() {
               raceEndTime: null,
             };
           } else if (now < bettingEndTime) {
+            console.log(`[Race ${currentRace}] ⏰ Betting period active (now: ${now}, ends: ${bettingEndTime}). State: BETTING`);
             setRaceState('betting');
           } else if (now < raceStartTime) {
+            console.log(`[Race ${currentRace}] 🏁 Pre-countdown (now: ${now}, starts: ${raceStartTime}). State: PRE_COUNTDOWN`);
             setRaceState('pre_countdown');
           } else if (now < raceEndTime) {
+            console.log(`[Race ${currentRace}] 🏎️ Race in progress (now: ${now}, ends: ${raceEndTime}). State: RACING`);
             setRaceState('racing');
           } else if (info.finalized) {
+            console.log(`[Race ${currentRace}] 🏆 Race finished and finalized. Winner: ${info.winner}. State: FINISHED`);
             setRaceState('finished');
             if (info.winner > 0) {
               setLastWinner(info.winner);
             }
           } else {
+            console.log(`[Race ${currentRace}] ⏱️ Race ended but not finalized yet (now: ${now}, raceEnd: ${raceEndTime}). State: FINISHED`);
             // La carrera terminó pero no está finalizada
             setRaceState('finished');
           }
