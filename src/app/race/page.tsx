@@ -293,13 +293,17 @@ export default function RacePage() {
       }
 
       // Obtener apuesta del usuario (no crítico)
-      if (account) {
+      // Solo intentar si la carrera está inicializada (startTime > 0)
+      if (account && info && Number(info.startTime) > 0) {
         try {
           const userBetData = await callWithTimeout(getUserBet(provider, account, currentRace), 5000);
           setUserBet(userBetData);
         } catch (error) {
           // Silenciar errores
         }
+      } else if (account && info && Number(info.startTime) === 0) {
+        // Carrera no inicializada - no hay apuestas todavía
+        setUserBet(null);
       }
     } catch (error: any) {
       // Solo loggear errores críticos que no sean de timeout/RPC
