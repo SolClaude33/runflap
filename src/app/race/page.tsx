@@ -1289,6 +1289,7 @@ export default function RacePage() {
                 raceId={raceNumber}
                 raceStartTime={raceInfo ? Number(raceInfo.bettingEndTime) + PRE_COUNTDOWN_DURATION : 0}
                 raceSeed={raceSeedData}
+                calculatedWinner={calculatedWinner}
               />
             )}
           </div>

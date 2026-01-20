@@ -12,8 +12,10 @@ interface Racer {
   image: string;
   color: string;
   carColor: string;
-  distance: number;
+  distance: number; // Deterministic distance for logic
+  visualDistance: number; // Interpolated distance for smooth rendering
   lap: number;
+  visualLap: number; // Interpolated lap for smooth rendering
   baseSpeed: number;
   currentSpeed: number;
   targetSpeed: number;
@@ -34,6 +36,7 @@ interface RaceTrackProps {
   raceId: number; // ID de la carrera para seed determinístico
   raceStartTime: number; // Timestamp del contrato cuando empieza la carrera (Unix timestamp)
   raceSeed: { seed: number; generated: boolean } | null; // Seed del contrato (CRITICAL: todos los clientes deben usar el mismo)
+  calculatedWinner?: number | null; // Pre-calculated winner from seed (to give visual advantage)
 }
 
 // Professional F1/NASCAR hybrid oval track - clean racing circuit
@@ -66,7 +69,9 @@ const createInitialRacers = (seed: number = 0): Racer[] => {
     return {
       ...r,
       distance: 0,
+      visualDistance: 0,
       lap: 1,
+      visualLap: 1,
       baseSpeed,
       currentSpeed: baseSpeed,
       targetSpeed: baseSpeed,
@@ -78,7 +83,7 @@ const createInitialRacers = (seed: number = 0): Racer[] => {
   });
 };
 
-export default function RaceTrack({ raceState, countdown, preCountdown, onRaceEnd, raceId, raceStartTime, raceSeed }: RaceTrackProps) {
+export default function RaceTrack({ raceState, countdown, preCountdown, onRaceEnd, raceId, raceStartTime, raceSeed, calculatedWinner }: RaceTrackProps) {
   const [racers, setRacers] = useState<Racer[]>(createInitialRacers());
   const [winner, setWinner] = useState<Racer | null>(null);
   const [totalLength, setTotalLength] = useState<number>(0);
@@ -283,6 +288,10 @@ export default function RaceTrack({ raceState, countdown, preCountdown, onRaceEn
     const animate = (currentTime: number) => {
       if (winnerFoundRef.current) return;
 
+      // Calculate frame delta for smooth visual interpolation
+      const frameDelta = (currentTime - lastTimeRef.current) / 1000; // Convert to seconds
+      lastTimeRef.current = currentTime;
+
       // CRITICAL: Use contract time as absolute source of truth for synchronization
       // This ensures all clients see the same race progression
       const now = Date.now() / 1000; // Use milliseconds precision for smooth animation
@@ -291,7 +300,6 @@ export default function RaceTrack({ raceState, countdown, preCountdown, onRaceEn
       
       // CRITICAL: Update raceTimeRef to contract time for synchronization
       raceTimeRef.current = contractRaceTime;
-      lastTimeRef.current = currentTime;
       
       // CRITICAL: Process all ticks that have passed since the last frame
       // This ensures deterministic state updates matching raceSimulation.ts exactly
@@ -302,7 +310,10 @@ export default function RaceTrack({ raceState, countdown, preCountdown, onRaceEn
 
       // CRITICAL: Process each tick individually to ensure complete determinism
       // This matches the exact logic in raceSimulation.ts
-      for (let tick = lastProcessedTickRef.current; tick < targetTick; tick++) {
+      // Limit tick processing per frame to prevent stuttering (max 5 ticks = 0.5 seconds)
+      const ticksToProcess = Math.min(targetTick - lastProcessedTickRef.current, 5);
+      for (let i = 0; i < ticksToProcess; i++) {
+        const tick = lastProcessedTickRef.current + i;
         const tickContractTime = tick / 10; // Convert tick to contract time
         const tickDeltaTime = 0.1; // Each tick represents 0.1 seconds
 
@@ -338,28 +349,63 @@ export default function RaceTrack({ raceState, countdown, preCountdown, onRaceEn
             const distanceBehind = leaderDist - racerTotalDist;
             const timeRemaining = RACE_DURATION_SECONDS - tickContractTime;
             const isFinalSeconds = timeRemaining <= 5;
+            const isLastTwoLaps = racer.lap >= 4; // Last 2 laps (lap 4 and 5)
             
-            if (distanceBehind > 0 && position > 1 && !isFinalSeconds) {
-              const catchUpBoost = Math.min(0.06, (distanceBehind / totalLength) * 0.10);
-              newTargetSpeed *= (1 + catchUpBoost);
-            }
-            
-            if (isFinalSeconds && position > 1) {
-              const minimalCatchUp = Math.min(0.02, (distanceBehind / totalLength) * 0.05);
-              newTargetSpeed *= (1 + minimalCatchUp);
+            // EMOTIONAL RACING: First 3 laps are fair and competitive
+            // Last 2 laps: calculated winner gets advantage to ensure visual victory
+            if (calculatedWinner && isLastTwoLaps) {
+              // In last 2 laps, give calculated winner a boost to ensure they win visually
+              if (racer.id === calculatedWinner) {
+                // Winner gets progressive boost: stronger in lap 5, moderate in lap 4
+                const lapProgress = racer.lap === TOTAL_LAPS ? 1.0 : (racer.distance / totalLength);
+                const winnerBoost = racer.lap === TOTAL_LAPS 
+                  ? 1.15 + rngRef.current() * 0.10 // 15-25% boost on final lap
+                  : 1.10 + rngRef.current() * 0.05; // 10-15% boost on lap 4
+                newTargetSpeed *= winnerBoost;
+              } else {
+                // Non-winners get slightly reduced catch-up in last 2 laps
+                if (distanceBehind > 0 && position > 1 && !isFinalSeconds) {
+                  const minimalCatchUp = Math.min(0.03, (distanceBehind / totalLength) * 0.05);
+                  newTargetSpeed *= (1 + minimalCatchUp);
+                }
+              }
+            } else {
+              // First 3 laps: Fair competition for everyone
+              if (distanceBehind > 0 && position > 1 && !isFinalSeconds) {
+                const catchUpBoost = Math.min(0.06, (distanceBehind / totalLength) * 0.10);
+                newTargetSpeed *= (1 + catchUpBoost);
+              }
+              
+              if (isFinalSeconds && position > 1) {
+                const minimalCatchUp = Math.min(0.02, (distanceBehind / totalLength) * 0.05);
+                newTargetSpeed *= (1 + minimalCatchUp);
+              }
             }
             
             if (position === 1 && (leaderDist - lastPlaceDist) > totalLength * 0.15) {
-              newTargetSpeed *= 0.90;
+              // In first 3 laps, slow down leader if too far ahead (fair competition)
+              // In last 2 laps, don't slow down calculated winner
+              if (!calculatedWinner || !isLastTwoLaps || racer.id !== calculatedWinner) {
+                newTargetSpeed *= 0.90;
+              }
             }
             
             const raceProgress = (racer.lap - 1 + racer.distance / totalLength) / TOTAL_LAPS;
             if (racer.lap === TOTAL_LAPS && position > 1) {
-              newTargetSpeed *= 1.15 + rngRef.current() * 0.10;
+              // Final lap boost for everyone, but extra for calculated winner
+              if (calculatedWinner && racer.id === calculatedWinner) {
+                newTargetSpeed *= 1.25 + rngRef.current() * 0.10; // Extra boost for winner on final lap
+              } else {
+                newTargetSpeed *= 1.15 + rngRef.current() * 0.10;
+              }
             }
             
             if (raceProgress > 0.45 && raceProgress < 0.55) {
-              newTargetSpeed *= 0.85 + rngRef.current() * 0.30;
+              // Mid-race slowdown applies to everyone in first 3 laps
+              // In last 2 laps, don't slow down calculated winner
+              if (!calculatedWinner || !isLastTwoLaps || racer.id !== calculatedWinner) {
+                newTargetSpeed *= 0.85 + rngRef.current() * 0.30;
+              }
             }
             
             newTargetSpeed = Math.max(300, Math.min(650, newTargetSpeed));
@@ -376,13 +422,29 @@ export default function RaceTrack({ raceState, countdown, preCountdown, onRaceEn
           const timeRemaining = Math.max(0.1, RACE_DURATION_SECONDS - tickContractTime);
           
           const isFinalSeconds = timeRemaining <= 5;
+          const isLastTwoLaps = racer.lap >= 4; // Last 2 laps
           let adjustedSpeed = newSpeed;
-          if (timeRemaining > 0 && distanceRemaining > 0 && !isFinalSeconds) {
-            const requiredSpeed = distanceRemaining / timeRemaining;
-            adjustedSpeed = newSpeed * 0.70 + requiredSpeed * 0.30;
-            adjustedSpeed = Math.max(350, Math.min(700, adjustedSpeed));
-          } else if (isFinalSeconds) {
-            adjustedSpeed = newSpeed;
+          
+          // Speed adjustments: Fair in first 3 laps, winner advantage in last 2 laps
+          if (calculatedWinner && isLastTwoLaps && racer.id === calculatedWinner) {
+            // Winner gets priority in speed adjustments in last 2 laps to maintain lead
+            if (timeRemaining > 0 && distanceRemaining > 0 && !isFinalSeconds) {
+              const requiredSpeed = distanceRemaining / timeRemaining;
+              // Winner uses more of their natural speed (80% vs 70% for others)
+              adjustedSpeed = newSpeed * 0.80 + requiredSpeed * 0.20;
+              adjustedSpeed = Math.max(400, Math.min(700, adjustedSpeed)); // Higher min for winner
+            } else if (isFinalSeconds) {
+              adjustedSpeed = newSpeed;
+            }
+          } else {
+            // Standard speed adjustment for everyone in first 3 laps, and non-winners in last 2
+            if (timeRemaining > 0 && distanceRemaining > 0 && !isFinalSeconds) {
+              const requiredSpeed = distanceRemaining / timeRemaining;
+              adjustedSpeed = newSpeed * 0.70 + requiredSpeed * 0.30;
+              adjustedSpeed = Math.max(350, Math.min(700, adjustedSpeed));
+            } else if (isFinalSeconds) {
+              adjustedSpeed = newSpeed;
+            }
           }
           
           let newDistance = racer.distance + adjustedSpeed * tickDeltaTime;
@@ -403,8 +465,10 @@ export default function RaceTrack({ raceState, countdown, preCountdown, onRaceEn
 
           return { 
             ...racer, 
-            distance: newDistance,
-            lap: newLap,
+            distance: newDistance, // Deterministic distance
+            visualDistance: newDistance, // Initialize visual distance (will be interpolated)
+            lap: newLap, // Deterministic lap
+            visualLap: newLap, // Initialize visual lap (will be interpolated)
             currentSpeed: newSpeed,
             targetSpeed: newTargetSpeed,
             lastSpeedChange: newLastSpeedChange,
@@ -412,15 +476,42 @@ export default function RaceTrack({ raceState, countdown, preCountdown, onRaceEn
           };
         });
       }
-      lastProcessedTickRef.current = targetTick; // Update last processed tick
+      lastProcessedTickRef.current = Math.min(targetTick, lastProcessedTickRef.current + ticksToProcess); // Update last processed tick
 
-      // Calculate angles for visual rendering (after all ticks are processed)
+      // SMOOTH VISUAL INTERPOLATION: Use frame delta for smooth movement between ticks
+      // This keeps the logic deterministic but makes the visual animation fluid
+      const visualDeltaTime = Math.min(frameDelta, 0.1); // Cap at 0.1s for stability
+      
+      // Apply smooth visual interpolation for movement (only affects rendering, not logic)
       updatedRacers = updatedRacers.map((racer, index) => {
+        if (racer.finished) {
+          return {
+            ...racer,
+            visualDistance: racer.distance,
+            visualLap: racer.lap
+          };
+        }
+        
+        // Use current speed for smooth visual interpolation between ticks
+        const visualDistance = racer.distance + racer.currentSpeed * visualDeltaTime;
+        const visualLap = visualDistance >= totalLength && racer.lap < TOTAL_LAPS 
+          ? racer.lap + 1 
+          : racer.lap;
+        const visualDistanceClamped = visualLap > racer.lap 
+          ? visualDistance - totalLength 
+          : Math.min(visualDistance, totalLength);
+        
+        // Calculate smooth angle interpolation using visual distance
         const laneOffset = (index - 1.5);
-        const posData = getPositionAndAngle(racer.distance, laneOffset, racer.prevAngle);
+        const totalVisualDistance = (visualLap - 1) * totalLength + visualDistanceClamped;
+        const posData = getPositionAndAngle(totalVisualDistance, laneOffset, racer.prevAngle);
+        
         return {
           ...racer,
-          prevAngle: posData.angle
+          // Keep deterministic distance/lap for logic
+          visualDistance: visualDistanceClamped, // Use for smooth rendering
+          visualLap: visualLap, // Use for smooth rendering
+          prevAngle: posData.angle // Smooth visual angle
         };
       });
 
@@ -871,7 +962,11 @@ export default function RaceTrack({ raceState, countdown, preCountdown, onRaceEn
         {/* Racing cars and avatars */}
         {racers.map((racer, index) => {
           const laneOffset = (index - 1.5);
-          const pos = getPositionAndAngle(racer.distance, laneOffset, racer.prevAngle);
+          // Use visual distance for smooth rendering, but calculate position from deterministic distance
+          const totalVisualDistance = (racer.visualLap - 1) * totalLength + racer.visualDistance;
+          const pos = getPositionAndAngle(totalVisualDistance, laneOffset, racer.prevAngle);
+          // Calculate position from deterministic distance for accuracy
+          const racerTotalDist = (racer.lap - 1) * totalLength + racer.distance;
           const racerPosition = positions.find(p => p.id === racer.id)?.position || index + 1;
           
           return (
@@ -977,25 +1072,7 @@ export default function RaceTrack({ raceState, countdown, preCountdown, onRaceEn
             </div>
           )}
 
-          <div className="text-[10px] text-[#7cb894] mb-1 mt-2">Live Speeds:</div>
-          {racers.map(racer => (
-            <div key={racer.id} className="flex items-center gap-2 text-[10px] text-white py-0.5">
-              <div 
-                className="w-2 h-2 rounded-full" 
-                style={{ backgroundColor: racer.color }} 
-              />
-              <span className="truncate w-16">{racer.name}</span>
-              <div className="flex-1 bg-[#1a4a2e] rounded-full h-2 overflow-hidden">
-                <div 
-                  className="h-full transition-all duration-100"
-                  style={{ 
-                    width: `${Math.min(((racer.currentSpeed - 300) / 300) * 100, 100)}%`,
-                    backgroundColor: racer.color 
-                  }}
-                />
-              </div>
-            </div>
-          ))}
+          {/* Speed system hidden as requested */}
 
           <div className="text-[8px] text-white/50 mt-2 border-t border-[#2d6b4a]/50 pt-2">
             Fair racing: All racers have balanced speeds (400 base) with rubber-banding for trailing cars. Race duration: ~30 seconds.
