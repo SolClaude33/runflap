@@ -341,8 +341,26 @@ export default function RacePage() {
         return;
       }
       
-      // Si la carrera terminó hace más de 5 segundos pero no está finalizada
+      // Si la carrera terminó hace más de 5 segundos pero no está finalizada según el estado local
       if (now > raceEndTime + 5 && !raceInfo.finalized) {
+        // PRIMERO: Verificar directamente en el contrato si ya está finalizada
+        // Esto evita llamadas innecesarias al backend
+        try {
+          if (provider) {
+            const contractInfo = await getRaceInfo(provider, raceNumber);
+            if (contractInfo && contractInfo.finalized) {
+              // El contrato dice que ya está finalizada, pero nuestro estado local no
+              // Forzar actualización inmediata
+              console.log(`[Auto-Finalize] Race ${raceNumber} already finalized on-chain but state not updated. Forcing refresh...`);
+              setTimeout(() => fetchRaceData(), 100);
+              return;
+            }
+          }
+        } catch (error) {
+          // Si falla la verificación, continuar con el intento de finalización
+          console.warn(`[Auto-Finalize] Could not verify finalization status for race ${raceNumber}, proceeding...`);
+        }
+        
         const timeSinceEnd = now - raceEndTime;
         console.log(`[Auto-Finalize] Race ${raceNumber} ended ${timeSinceEnd}s ago but not finalized. Attempting auto-finalize...`);
         
@@ -377,8 +395,16 @@ export default function RacePage() {
             // Recargar datos después de finalizar
             setTimeout(() => fetchRaceData(), 2000);
           } else {
-            console.error(`[Auto-Finalize] ❌ Race ${raceNumber} auto-finalize failed:`, result.error);
-            finalizingRaceRef.current.delete(raceNumber);
+            // Si el error es "already finalized", forzar recarga para actualizar estado
+            if (result.error && result.error.includes('already finalized')) {
+              console.log(`[Auto-Finalize] Race ${raceNumber} already finalized on-chain. Forcing state update...`);
+              finalizingRaceRef.current.delete(raceNumber);
+              // Recargar inmediatamente para actualizar el estado
+              setTimeout(() => fetchRaceData(), 500);
+            } else {
+              console.error(`[Auto-Finalize] ❌ Race ${raceNumber} auto-finalize failed:`, result.error);
+              finalizingRaceRef.current.delete(raceNumber);
+            }
           }
         } catch (error: any) {
           console.error(`[Auto-Finalize] ❌ Race ${raceNumber} auto-finalize error:`, error.message || error);
