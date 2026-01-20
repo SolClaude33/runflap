@@ -1,4 +1,4 @@
-# ✅ LISTA DE VERIFICACIÓN PARA DEPLOYMENT
+# ✅ LISTA DE VERIFICACIÓN PARA DEPLOYMENT [v2.1 - Force Sync]
 
 ## Estado Actual del Problema
 
