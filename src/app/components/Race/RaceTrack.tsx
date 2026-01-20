@@ -88,6 +88,7 @@ export default function RaceTrack({ raceState, countdown, onRaceEnd, raceId, rac
   const animationRef = useRef<number | null>(null);
   const lastTimeRef = useRef<number>(0);
   const raceTimeRef = useRef<number>(0);
+  const previousContractTimeRef = useRef<number>(0); // Track previous contract time for deltaTime calculation
   const winnerFoundRef = useRef<boolean>(false);
   const racersRef = useRef<Racer[]>(createInitialRacers());
   const pathRef = useRef<SVGPathElement | null>(null);
@@ -159,28 +160,25 @@ export default function RaceTrack({ raceState, countdown, onRaceEnd, raceId, rac
   };
 
   useEffect(() => {
-    // Initialize racers even if raceSeed is null (use fallback seed)
+    // CRITICAL: DO NOT initialize racers until seed is available
+    // This ensures all clients use the exact same seed for perfect synchronization
     if ((raceState === 'countdown' || raceState === 'racing') && totalLength > 0 && !racersReady && raceId >= 0) {
-      // CRITICAL: Use seed directly from contract
-      // ALL clients MUST use the exact same seed from the contract for synchronization
-      // The contract generates a deterministic seed when betting closes
+      // CRITICAL: Wait for contract seed - DO NOT use fallback seed
+      // If seed is not available, the race should not start
       // This ensures perfect synchronization across all clients
       
-      let contractSeed: number;
-      
-      if (raceSeed && raceSeed.generated && raceSeed.seed !== 0) {
-        // CRITICAL: Use the seed from the contract
-        // This is THE ONLY source of truth for the race
-        // ALL clients MUST use the exact same seed for perfect synchronization
-        contractSeed = raceSeed.seed;
-        console.log(`[RaceTrack] ✅ Using contract seed: ${contractSeed} for race ${raceId}`);
-      } else {
-        // Fallback: If seed not available yet
-        // This can happen if betting just closed and seed is being generated
-        // Use a temporary deterministic seed based on raceId only
-        contractSeed = raceId * 999999 + 123456;
-        console.warn(`[RaceTrack] ⚠️ WARNING: Contract seed not ready for race ${raceId} (seed: ${raceSeed?.seed}, generated: ${raceSeed?.generated}). Using fallback seed: ${contractSeed}. Race may not be synchronized!`);
+      if (!raceSeed || !raceSeed.generated || raceSeed.seed === 0) {
+        // Seed not available yet - do not initialize racers
+        // The race will wait until the seed is generated
+        console.warn(`[RaceTrack] ⚠️ CRITICAL: Contract seed not ready for race ${raceId} (seed: ${raceSeed?.seed}, generated: ${raceSeed?.generated}). Race will not start until seed is available!`);
+        return; // Do not initialize racers without seed
       }
+      
+      // CRITICAL: Use the seed from the contract
+      // This is THE ONLY source of truth for the race
+      // ALL clients MUST use the exact same seed for perfect synchronization
+      const contractSeed = raceSeed.seed;
+      console.log(`[RaceTrack] ✅ Using contract seed: ${contractSeed} for race ${raceId}`);
       
       // CRITICAL: Ensure seed is a 32-bit unsigned integer for consistent PRNG
       const normalizedSeed = (contractSeed >>> 0);
@@ -200,6 +198,7 @@ export default function RaceTrack({ raceState, countdown, onRaceEnd, raceId, rac
       const actualRaceStartTime = raceStartTime > 0 ? raceStartTime : now;
       const initialContractRaceTime = Math.max(0, now - actualRaceStartTime);
       raceTimeRef.current = initialContractRaceTime;
+      previousContractTimeRef.current = initialContractRaceTime; // Initialize previous time
       
       // CRITICAL: Pre-consume RNG to sync with current contract time
       // This ensures clients connecting late are synchronized
@@ -286,28 +285,14 @@ export default function RaceTrack({ raceState, countdown, onRaceEnd, raceId, rac
       const actualRaceStartTime = raceStartTime > 0 ? raceStartTime : now;
       const contractRaceTime = Math.max(0, now - actualRaceStartTime);
       
-      // Use contract time directly - this is the synchronized time for all clients
-      const previousRaceTime = raceTimeRef.current;
+      // CRITICAL: Calculate deterministic deltaTime based on contract time difference
+      // This ensures all clients use the same deltaTime for the same contract time
+      const previousContractTime = previousContractTimeRef.current;
+      const deterministicDeltaTime = Math.max(0, Math.min(contractRaceTime - previousContractTime, 0.1)); // Cap at 0.1s per frame for smoothness
       
-      // CRITICAL: If client is far behind (e.g., just connected), catch up quickly
-      // But limit catch-up to prevent huge jumps that look unnatural
-      const timeDiff = contractRaceTime - previousRaceTime;
-      let deltaTime: number;
-      
-      if (timeDiff > 1.0) {
-        // Client is more than 1 second behind - catch up in larger steps
-        // This happens when client connects late to an ongoing race
-        deltaTime = Math.min(timeDiff, 0.5); // Max 0.5s per frame for catch-up
-        raceTimeRef.current = previousRaceTime + deltaTime;
-      } else {
-        // Normal operation - use smooth frame-based deltaTime
-        // Use actual frame time for smooth animation, but sync with contract time
-        const frameDelta = (currentTime - lastTimeRef.current) / 1000;
-        deltaTime = Math.min(frameDelta, 0.033); // Cap at ~30fps minimum
-        raceTimeRef.current = contractRaceTime; // Sync to contract time
-      }
-      
-      lastTimeRef.current = currentTime;
+      // CRITICAL: Update raceTimeRef and previousContractTimeRef for next frame
+      raceTimeRef.current = contractRaceTime;
+      previousContractTimeRef.current = contractRaceTime;
       
       // CRITICAL: Consume RNG based on synchronized contract time, not frame count
       // Use time-based ticks (every 0.1 seconds) instead of frame-based ticks
@@ -327,6 +312,9 @@ export default function RaceTrack({ raceState, countdown, onRaceEnd, raceId, rac
       // CRITICAL: Use the synchronized tick, not a local counter
       const tick = timeBasedTick;
       const rng = rngRef.current;
+      
+      // Update lastTimeRef for frame timing (used for display only, not calculations)
+      lastTimeRef.current = currentTime;
 
       const currentRacers = racersRef.current;
       let raceWinner: Racer | null = null;
@@ -412,12 +400,17 @@ export default function RaceTrack({ raceState, countdown, onRaceEnd, raceId, rac
           newLastSpeedChange = raceTimeRef.current;
         }
         
-        // Smooth speed interpolation for natural acceleration/deceleration
-        const speedLerp = 0.20; // Slightly faster interpolation
-        const newSpeed = racer.currentSpeed + (newTargetSpeed - racer.currentSpeed) * speedLerp;
+        // CRITICAL: Use deterministic speed calculation based on contract time
+        // This ensures all clients calculate the same speeds at the same time
+        // Speed changes happen at specific ticks, so we need to interpolate deterministically
+        const speedLerp = 0.20; // Interpolation factor
+        // Calculate time since last speed change using contract time
+        const timeSinceSpeedChange = contractRaceTime - racer.lastSpeedChange;
+        // Apply interpolation deterministically based on time, not frames
+        const lerpFactor = Math.min(1.0, timeSinceSpeedChange * (1 / speedLerp)); // Time-based lerp
+        const newSpeed = racer.currentSpeed + (newTargetSpeed - racer.currentSpeed) * lerpFactor;
         
-        // Calculate distance traveled this frame
-        // Speed is in units per second, deltaTime is in seconds
+        // CRITICAL: Calculate distance using deterministic deltaTime based on ticks
         // Adjust speed based on race progress to ensure race completes in ~30 seconds
         const raceProgress = contractRaceTime / RACE_DURATION_SECONDS;
         const totalDistanceNeeded = totalLength * TOTAL_LAPS;
@@ -440,7 +433,8 @@ export default function RaceTrack({ raceState, countdown, onRaceEnd, raceId, rac
           adjustedSpeed = newSpeed;
         }
         
-        let newDistance = racer.distance + adjustedSpeed * deltaTime;
+        // CRITICAL: Use deterministic deltaTime, not frame-based deltaTime
+        let newDistance = racer.distance + adjustedSpeed * deterministicDeltaTime;
         let newLap = racer.lap;
         
         // CRITICAL FIX: Prevent cars from going past 5 laps

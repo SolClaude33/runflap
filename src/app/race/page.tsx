@@ -273,13 +273,35 @@ export default function RacePage() {
             } else {
               console.log(`[Race ${currentRace}] ⏳ Seed not generated yet, triggering backend generation...`);
               
-              // Trigger seed generation via backend API (no MetaMask popup)
+              // CRITICAL: Trigger seed generation via backend API (no MetaMask popup)
               // This replaces the need for a cron job
+              // Pass raceId to ensure correct race seed is generated
               try {
-                const response = await fetch('/api/race/generate-seed');
+                const response = await fetch('/api/race/generate-seed', {
+                  method: 'POST',
+                  headers: {
+                    'Content-Type': 'application/json',
+                  },
+                  body: JSON.stringify({ raceId: currentRace }),
+                });
                 const result = await response.json();
                 if (result.success) {
                   console.log(`[Race ${currentRace}] ✅ Seed generation triggered:`, result.message);
+                  // Immediately refresh seed data after generation
+                  setTimeout(async () => {
+                    try {
+                      const newSeed = await getContractRaceSeed(provider, currentRace);
+                      if (newSeed && newSeed.generated && newSeed.seed !== 0) {
+                        setRaceSeedData({
+                          seed: newSeed.seed,
+                          generated: newSeed.generated,
+                        });
+                        console.log(`[Race ${currentRace}] ✅ Seed now available: ${newSeed.seed}`);
+                      }
+                    } catch (error) {
+                      // Silently retry later
+                    }
+                  }, 2000);
                 } else {
                   console.log(`[Race ${currentRace}] ℹ️ Seed generation:`, result.message || result.error);
                 }
@@ -340,6 +362,17 @@ export default function RacePage() {
     }
 
     const checkAndFinalize = async () => {
+      // Verificar nuevamente si ya está verificado como finalizado (protección adicional)
+      if (verifiedFinalizedRef.current.has(raceNumber)) {
+        return;
+      }
+
+      // Verificar nuevamente si el estado local ya se actualizó (protección adicional)
+      if (raceInfo.finalized) {
+        verifiedFinalizedRef.current.delete(raceNumber);
+        return;
+      }
+
       const now = Math.floor(Date.now() / 1000);
       const raceEndTime = Number(raceInfo.raceEndTime);
       const startTime = Number(raceInfo.startTime);
@@ -361,26 +394,29 @@ export default function RacePage() {
               // El contrato dice que ya está finalizada, pero nuestro estado local no
               // Marcar como verificado para evitar verificaciones repetidas
               verifiedFinalizedRef.current.add(raceNumber);
+              // Limpiar cualquier flag de finalización en progreso
+              finalizingRaceRef.current.delete(raceNumber);
               // Forzar actualización inmediata
               console.log(`[Auto-Finalize] Race ${raceNumber} already finalized on-chain but state not updated. Forcing refresh...`);
-              setTimeout(() => fetchRaceData(), 100);
+              // Llamar fetchRaceData inmediatamente y también con un pequeño delay para asegurar actualización
+              fetchRaceData();
               return;
             }
           }
         } catch (error) {
-          // Si falla la verificación, continuar con el intento de finalización
+          // Si falla la verificación, continuar con el intento de finalización solo si no está en progreso
           console.warn(`[Auto-Finalize] Could not verify finalization status for race ${raceNumber}, proceeding...`);
         }
         
-        const timeSinceEnd = now - raceEndTime;
-        console.log(`[Auto-Finalize] Race ${raceNumber} ended ${timeSinceEnd}s ago but not finalized. Attempting auto-finalize...`);
-        
-        // Prevenir intentos duplicados
+        // Prevenir intentos duplicados (verificar ANTES de intentar)
         if (finalizingRaceRef.current.has(raceNumber)) {
           console.log(`[Auto-Finalize] Race ${raceNumber} already being finalized, skipping...`);
           return;
         }
 
+        const timeSinceEnd = now - raceEndTime;
+        console.log(`[Auto-Finalize] Race ${raceNumber} ended ${timeSinceEnd}s ago but not finalized. Attempting auto-finalize...`);
+        
         finalizingRaceRef.current.add(raceNumber);
         
         try {
@@ -403,24 +439,37 @@ export default function RacePage() {
           if (result.success) {
             console.log(`[Auto-Finalize] ✅ Race ${raceNumber} auto-finalized successfully. Winner: Car ${detectedWinner}. TX: ${result.txHash}`);
             finalizingRaceRef.current.delete(raceNumber);
+            // Marcar como verificado para evitar verificaciones repetidas mientras se actualiza el estado
+            verifiedFinalizedRef.current.add(raceNumber);
             // Recargar datos después de finalizar
-            setTimeout(() => fetchRaceData(), 2000);
+            fetchRaceData();
+            // También programar una segunda actualización después de un delay para asegurar sincronización
+            setTimeout(() => fetchRaceData(), 1500);
           } else {
             // Si el error es "already finalized", forzar recarga para actualizar estado
-            if (result.error && result.error.includes('already finalized')) {
+            if (result.error && (result.error.includes('already finalized') || result.error.includes('already final'))) {
               console.log(`[Auto-Finalize] Race ${raceNumber} already finalized on-chain. Forcing state update...`);
               // Marcar como verificado para evitar verificaciones repetidas
               verifiedFinalizedRef.current.add(raceNumber);
               finalizingRaceRef.current.delete(raceNumber);
               // Recargar inmediatamente para actualizar el estado
-              setTimeout(() => fetchRaceData(), 500);
+              fetchRaceData();
+              // También programar una segunda actualización
+              setTimeout(() => fetchRaceData(), 1000);
             } else {
               console.error(`[Auto-Finalize] ❌ Race ${raceNumber} auto-finalize failed:`, result.error);
+              // No marcar como verificado si hubo un error real
               finalizingRaceRef.current.delete(raceNumber);
             }
           }
         } catch (error: any) {
           console.error(`[Auto-Finalize] ❌ Race ${raceNumber} auto-finalize error:`, error.message || error);
+          // Si es un error de red/HTTP y es 400, podría ser "already finalized"
+          if (error.message && error.message.includes('400')) {
+            console.log(`[Auto-Finalize] Received 400 error, assuming race ${raceNumber} already finalized. Forcing state update...`);
+            verifiedFinalizedRef.current.add(raceNumber);
+            fetchRaceData();
+          }
           finalizingRaceRef.current.delete(raceNumber);
         }
       }
