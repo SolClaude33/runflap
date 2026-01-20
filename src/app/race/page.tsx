@@ -34,6 +34,7 @@ import {
   type CarStats,
   type RaceStats,
 } from '../services/flaprace';
+import { calculateRaceWinner } from '@/lib/raceSimulation';
 import { ethers } from 'ethers';
 
 type RaceState = 'betting' | 'pre_countdown' | 'countdown' | 'racing' | 'finished';
@@ -644,22 +645,50 @@ export default function RacePage() {
   }, [signer, isOwner, provider]);
 
   const handleRaceEnd = useCallback(async (winnerId: number) => {
-    // CRITICAL: Store the first detected winner for this race
+    // CRITICAL: Calculate the winner deterministically from the seed
+    // This ensures the frontend and backend always agree on the winner
+    // The circuit length is approximately 1966.32 units (from RaceTrack.tsx)
+    const CIRCUIT_LENGTH = 1966.32;
+    let calculatedWinner = winnerId;
+    
+    if (raceSeedData && raceSeedData.generated && raceSeedData.seed !== 0 && raceInfo) {
+      try {
+        calculatedWinner = calculateRaceWinner(raceSeedData.seed, CIRCUIT_LENGTH);
+        console.log(`[Race ${raceNumber}] ✅ Calculated winner from seed: Car ${calculatedWinner} (visual: Car ${winnerId})`);
+        
+        // If visual winner doesn't match calculated winner, use calculated one
+        // This ensures the contract always has the correct winner
+        if (calculatedWinner !== winnerId) {
+          console.warn(`[Race ${raceNumber}] ⚠️ Winner mismatch! Visual: Car ${winnerId}, Calculated: Car ${calculatedWinner}. Using calculated winner to ensure contract consistency.`);
+          calculatedWinner = calculatedWinner; // Use calculated winner
+        } else {
+          console.log(`[Race ${raceNumber}] ✅ Visual winner matches calculated winner: Car ${calculatedWinner}`);
+        }
+      } catch (calcError: any) {
+        console.error(`[Race ${raceNumber}] Error calculating winner from seed:`, calcError);
+        // Fall back to visual winner if calculation fails
+        console.log(`[Race ${raceNumber}] Using visual winner: Car ${winnerId}`);
+      }
+    } else {
+      console.warn(`[Race ${raceNumber}] ⚠️ Seed not available, using visual winner: Car ${winnerId}`);
+    }
+    
+    // CRITICAL: Store the calculated winner (or visual if seed not available)
     // If a different winner is detected later, log a warning but use the first one
     if (!winnerDetectedRef.current.has(raceNumber)) {
-      winnerDetectedRef.current.set(raceNumber, winnerId);
-      console.log(`[Race ${raceNumber}] First winner detected: Car ${winnerId}`);
+      winnerDetectedRef.current.set(raceNumber, calculatedWinner);
+      console.log(`[Race ${raceNumber}] First winner determined: Car ${calculatedWinner}`);
     } else {
       const firstWinner = winnerDetectedRef.current.get(raceNumber);
-      if (firstWinner !== winnerId) {
-        console.warn(`[Race ${raceNumber}] Winner mismatch! First detected: Car ${firstWinner}, New: Car ${winnerId}. Using first winner.`);
-        // Use the first detected winner to ensure consistency
-        return; // Don't proceed with different winner
+      if (firstWinner !== calculatedWinner) {
+        console.warn(`[Race ${raceNumber}] Winner mismatch! First determined: Car ${firstWinner}, New: Car ${calculatedWinner}. Using first winner.`);
+        // Use the first determined winner to ensure consistency
+        calculatedWinner = firstWinner;
       }
     }
     
     setRaceState('finished');
-    setLastWinner(winnerId);
+    setLastWinner(calculatedWinner);
     
     // Finalizar la carrera en el contrato automáticamente
     // Esperar a que el contrato realmente termine antes de intentar finalizar
@@ -672,9 +701,9 @@ export default function RacePage() {
 
       finalizingRaceRef.current.add(raceNumber);
       
-      // Use the stored winner (first detected) to ensure consistency
-      const finalWinner = winnerDetectedRef.current.get(raceNumber) || winnerId;
-      console.log(`[Race ${raceNumber}] Finalizing with winner: Car ${finalWinner}`);
+      // Use the calculated winner to ensure consistency with backend
+      const finalWinner = calculatedWinner;
+      console.log(`[Race ${raceNumber}] Finalizing with calculated winner: Car ${finalWinner}`);
 
       const raceEndTime = Number(raceInfo.raceEndTime);
       const now = Math.floor(Date.now() / 1000);

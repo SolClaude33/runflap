@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { ethers } from 'ethers';
+import { calculateRaceWinner } from '@/lib/raceSimulation';
 
 // ABI simplificado para finalizar carrera
 const FLAPRACE_ABI = [
@@ -8,6 +9,9 @@ const FLAPRACE_ABI = [
   "function getRaceInfo(uint256 raceId) view returns (uint256 startTime, uint256 bettingEndTime, uint256 raceEndTime, uint8 winner, bool finalized, uint256 totalPool, uint256 nextRacePool, uint256 raceSeed, bool seedGenerated)",
   "function generateRaceSeed(uint256 raceId)",
 ];
+
+// Circuit length - must match RaceTrack.tsx
+const CIRCUIT_LENGTH = 1966.32;
 
 // Esta clave privada debe estar en variables de entorno y ser del owner del contrato
 const OWNER_PRIVATE_KEY = process.env.OWNER_PRIVATE_KEY || '';
@@ -54,7 +58,7 @@ export async function POST(request: NextRequest) {
     const contract = new ethers.Contract(CONTRACT_ADDRESS, FLAPRACE_ABI, wallet);
 
     // Verificar que la carrera existe y no está finalizada
-    const raceInfo = await contract.getRaceInfo(raceId);
+    let raceInfo = await contract.getRaceInfo(raceId);
     if (raceInfo.finalized) {
       return NextResponse.json(
         { success: false, error: 'Race already finalized' },
@@ -102,6 +106,8 @@ export async function POST(request: NextRequest) {
         const seedTx = await contract.generateRaceSeed(raceId);
         await seedTx.wait();
         console.log(`[Finalize API] Seed generated for race ${raceId}`);
+        // Refresh race info to get the generated seed
+        raceInfo = await contract.getRaceInfo(raceId);
       } catch (seedError: any) {
         console.error(`[Finalize API] Error generating seed (will continue with finalization):`, seedError.message);
         // Continuar con la finalización aunque falle el seed
@@ -109,15 +115,42 @@ export async function POST(request: NextRequest) {
       }
     }
 
-    // Finalizar la carrera
-    const tx = await contract.finalizeRace(raceId, winner);
+    // CRITICAL: Calculate the winner deterministically from the seed
+    // This ensures the backend and frontend always agree on the winner
+    let calculatedWinner = winner;
+    if (raceInfo.seedGenerated && raceInfo.raceSeed > 0) {
+      try {
+        calculatedWinner = calculateRaceWinner(Number(raceInfo.raceSeed), CIRCUIT_LENGTH);
+        console.log(`[Finalize API] Calculated winner from seed: Car ${calculatedWinner} (requested: Car ${winner})`);
+        
+        // If the requested winner doesn't match the calculated winner, use the calculated one
+        // This ensures the contract always has the correct winner
+        if (calculatedWinner !== winner) {
+          console.warn(`[Finalize API] ⚠️ Winner mismatch! Requested: Car ${winner}, Calculated: Car ${calculatedWinner}. Using calculated winner.`);
+          calculatedWinner = calculatedWinner; // Use calculated winner
+        } else {
+          console.log(`[Finalize API] ✅ Requested winner matches calculated winner: Car ${calculatedWinner}`);
+        }
+      } catch (calcError: any) {
+        console.error(`[Finalize API] Error calculating winner from seed:`, calcError);
+        // Fall back to requested winner if calculation fails
+        console.log(`[Finalize API] Using requested winner: Car ${winner}`);
+      }
+    } else {
+      console.warn(`[Finalize API] ⚠️ Seed not available, using requested winner: Car ${winner}`);
+    }
+
+    // Finalizar la carrera con el ganador calculado (o el solicitado si no se pudo calcular)
+    const tx = await contract.finalizeRace(raceId, calculatedWinner);
     const receipt = await tx.wait();
 
     return NextResponse.json({
       success: true,
       txHash: receipt.hash,
       raceId,
-      winner,
+      winner: calculatedWinner,
+      requestedWinner: winner,
+      calculatedFromSeed: raceInfo.seedGenerated && raceInfo.raceSeed > 0,
     });
   } catch (error: any) {
     console.error('Error finalizing race:', error);
