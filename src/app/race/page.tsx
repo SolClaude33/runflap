@@ -319,6 +319,62 @@ export default function RacePage() {
     }
   }, [provider, account]);
 
+  // Verificar y finalizar carreras que ya terminaron pero no se finalizaron
+  useEffect(() => {
+    if (!provider || !raceInfo || raceInfo.finalized) return;
+
+    const checkAndFinalize = async () => {
+      const now = Math.floor(Date.now() / 1000);
+      const raceEndTime = Number(raceInfo.raceEndTime);
+      
+      // Si la carrera terminó hace más de 5 segundos pero no está finalizada
+      if (raceEndTime > 0 && now > raceEndTime + 5 && !raceInfo.finalized) {
+        console.log(`[Race ${raceNumber}] ⚠️ Race ended ${now - raceEndTime}s ago but not finalized. Attempting auto-finalize...`);
+        
+        // Prevenir intentos duplicados
+        if (finalizingRaceRef.current.has(raceNumber)) {
+          return;
+        }
+
+        finalizingRaceRef.current.add(raceNumber);
+        
+        try {
+          // Intentar finalizar con el ganador detectado, o usar ganador 1 como fallback
+          const detectedWinner = winnerDetectedRef.current.get(raceNumber) || 1;
+          
+          const response = await fetch('/api/race/finalize', {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({
+              raceId: raceNumber,
+              winner: detectedWinner,
+            }),
+          });
+
+          const result = await response.json();
+          if (result.success) {
+            console.log(`[Race ${raceNumber}] ✅ Auto-finalized. Winner: Car ${detectedWinner}. TX: ${result.txHash}`);
+            finalizingRaceRef.current.delete(raceNumber);
+            // Recargar datos después de finalizar
+            setTimeout(() => fetchRaceData(), 2000);
+          } else {
+            console.error(`[Race ${raceNumber}] ❌ Auto-finalize failed:`, result.error);
+            finalizingRaceRef.current.delete(raceNumber);
+          }
+        } catch (error) {
+          console.error(`[Race ${raceNumber}] ❌ Auto-finalize error:`, error);
+          finalizingRaceRef.current.delete(raceNumber);
+        }
+      }
+    };
+
+    // Verificar cada 10 segundos si hay carreras pendientes de finalizar
+    const checkInterval = setInterval(checkAndFinalize, 10000);
+    return () => clearInterval(checkInterval);
+  }, [provider, raceInfo, raceNumber, fetchRaceData]);
+
   // Actualizar datos periódicamente
   // Durante carrera, actualizar cada 1 segundo para sincronización precisa
   // Fuera de carrera, cada 5 segundos es suficiente
