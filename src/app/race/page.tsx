@@ -199,14 +199,50 @@ export default function RacePage() {
             console.log(`[Race ${currentRace}] 🏁 Countdown (now: ${now}, winner determined at: ${winnerDeterminedTime}). State: PRE_COUNTDOWN`);
             setRaceState('pre_countdown');
             
-            // El cron job determinará el ganador automáticamente durante el countdown
-            // El frontend solo lee el ganador del contrato cuando está disponible
+            // Intentar determinar ganador automáticamente llamando al endpoint del servidor
+            // Esto no requiere wallet del usuario, el servidor usa OWNER_PRIVATE_KEY
+            // Usar un flag para evitar múltiples llamadas
+            if (info.winner === 0 && now >= bettingEndTime && !determiningWinnerRef.current.get(currentRace)) {
+              determiningWinnerRef.current.set(currentRace, true);
+              
+              // Llamar al endpoint del servidor para que determine el ganador
+              // El servidor usará OWNER_PRIVATE_KEY, no requiere wallet del usuario
+              fetch('/api/race/determine-winner', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ raceId: currentRace })
+              })
+              .then(async (res) => {
+                const data = await res.json();
+                if (data.success) {
+                  console.log(`[Race ${currentRace}] ✅ Winner determined by server: ${data.message}`);
+                  // Recargar datos después de un breve delay
+                  setTimeout(() => {
+                    fetchRaceData();
+                  }, 2000);
+                } else {
+                  console.log(`[Race ${currentRace}] ⏳ ${data.message || 'Waiting for winner determination...'}`);
+                  // Si no se pudo determinar (aún no es el momento), permitir reintentar
+                  if (data.message?.includes('not ended') || data.message?.includes('already determined')) {
+                    determiningWinnerRef.current.delete(currentRace);
+                  }
+                }
+              })
+              .catch(err => {
+                console.log(`[Race ${currentRace}] Server-side winner determination attempted`);
+                // Permitir reintentar después de un tiempo
+                setTimeout(() => {
+                  determiningWinnerRef.current.delete(currentRace);
+                }, 5000);
+              });
+            }
+            
+            // Leer el ganador del contrato cuando esté disponible
             if (info.winner > 0 && info.winner !== contractWinner) {
               setContractWinner(info.winner);
-              console.log(`[Race ${currentRace}] 🎯 Contract winner set to: Car ${info.winner} (determined by cron job)`);
+              console.log(`[Race ${currentRace}] 🎯 Contract winner set to: Car ${info.winner}`);
             } else if (info.winner === 0) {
-              // El cron job debería determinarlo pronto
-              console.log(`[Race ${currentRace}] ⏳ Waiting for cron job to determine winner...`);
+              console.log(`[Race ${currentRace}] ⏳ Waiting for winner to be determined...`);
             }
           } else if (now < raceVisualEndTime) {
             // Race visual period (30 segundos para mostrar la carrera)
