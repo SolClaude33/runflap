@@ -226,12 +226,22 @@ export default function RacePage() {
               console.warn(`[Race ${currentRace}] ⚠️ Winner not determined yet, waiting for cron job`);
             }
           } else {
-            // Race finished
-            console.log(`[Race ${currentRace}] 🏆 Race finished. Winner: ${info.winner}. State: FINISHED`);
-            setRaceState('finished');
-            if (info.winner > 0) {
+            // Race visual period ended - but check if contract is finalized
+            if (info.finalized && info.winner > 0) {
+              // Contract is finalized and has a winner
+              console.log(`[Race ${currentRace}] 🏆 Race finished and finalized. Winner: ${info.winner}. State: FINISHED`);
+              setRaceState('finished');
               setContractWinner(info.winner);
               setLastWinner(info.winner);
+            } else {
+              // Visual race ended but contract not finalized yet (waiting for winner determination)
+              console.log(`[Race ${currentRace}] ⏳ Race visual ended but not finalized yet (winner: ${info.winner}, finalized: ${info.finalized}). Waiting for cron job...`);
+              setRaceState('racing'); // Keep in racing state until finalized
+              // Keep checking for winner
+              if (info.winner > 0 && info.winner !== contractWinner) {
+                setContractWinner(info.winner);
+                setLastWinner(info.winner);
+              }
             }
           }
         }
