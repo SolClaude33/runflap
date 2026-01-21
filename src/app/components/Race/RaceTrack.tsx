@@ -375,7 +375,7 @@ export default function RaceTrack({ raceState, countdown, preCountdown, onRaceEn
               newTargetSpeed *= 0.85 + rngRef.current() * 0.30;
             }
             
-            newTargetSpeed = Math.max(300, Math.min(650, newTargetSpeed));
+            newTargetSpeed = Math.max(400, Math.min(650, newTargetSpeed)); // Increased min from 300 to 400 to ensure race completion
             newLastSpeedChange = tickContractTime;
           }
           
@@ -397,8 +397,12 @@ export default function RaceTrack({ raceState, countdown, preCountdown, onRaceEn
             adjustedSpeed = newSpeed * 0.70 + requiredSpeed * 0.30;
             adjustedSpeed = Math.max(400, Math.min(700, adjustedSpeed)); // Increased min to 400 for better completion
           } else if (isFinalSeconds) {
-            adjustedSpeed = newSpeed;
+            // In final seconds, ensure minimum speed to complete race
+            adjustedSpeed = Math.max(400, newSpeed);
           }
+          
+          // Final safety check: ensure speed is never below minimum
+          adjustedSpeed = Math.max(400, adjustedSpeed);
           
           let newDistance = racer.distance + adjustedSpeed * tickDeltaTime;
           let newLap = racer.lap;
@@ -450,12 +454,19 @@ export default function RaceTrack({ raceState, countdown, preCountdown, onRaceEn
         let visualSpeed = racer.currentSpeed;
         
         // Apply visual boost to calculated winner in last 2 laps (visual only, doesn't affect logic)
+        // CRITICAL: Use deterministic calculation based on contract race time to ensure consistency across browsers
+        // This ensures the same boost is applied at the same time in all browsers, regardless of frame rate
         const isLastTwoLaps = racer.lap >= 4;
         if (calculatedWinner && isLastTwoLaps && racer.id === calculatedWinner) {
-          // Winner gets visual boost: 10-15% in lap 4, 15-25% in lap 5
+          // Calculate deterministic boost based on contract race time (rounded to nearest 0.1s for consistency)
+          // Use the current tick to ensure deterministic calculation
+          const currentTick = Math.floor(contractRaceTime * 10);
+          // Create deterministic "random" value using tick and racer ID
+          const tickValue = (currentTick * 7919 + racer.id * 3571) % 1000; // Prime numbers for better distribution
+          const normalizedValue = tickValue / 1000; // 0-1 range
           const winnerVisualBoost = racer.lap === TOTAL_LAPS 
-            ? 1.15 + (Math.random() * 0.10) // 15-25% boost on final lap
-            : 1.10 + (Math.random() * 0.05); // 10-15% boost on lap 4
+            ? 1.15 + (normalizedValue * 0.10) // 15-25% boost on final lap (deterministic)
+            : 1.10 + (normalizedValue * 0.05); // 10-15% boost on lap 4 (deterministic)
           visualSpeed *= winnerVisualBoost;
         }
         

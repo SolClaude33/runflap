@@ -130,7 +130,7 @@ export function calculateRaceWinner(
         }
         
         // Clamp speeds
-        newTargetSpeed = Math.max(300, Math.min(650, newTargetSpeed));
+        newTargetSpeed = Math.max(400, Math.min(650, newTargetSpeed)); // Increased min from 300 to 400 to ensure race completion
         newLastSpeedChange = contractRaceTime;
       }
       
@@ -153,8 +153,12 @@ export function calculateRaceWinner(
         adjustedSpeed = newSpeed * 0.70 + requiredSpeed * 0.30;
         adjustedSpeed = Math.max(400, Math.min(700, adjustedSpeed)); // Increased min to 400 for better completion
       } else if (isFinalSeconds) {
-        adjustedSpeed = newSpeed;
+        // In final seconds, ensure minimum speed to complete race
+        adjustedSpeed = Math.max(400, newSpeed);
       }
+      
+      // Final safety check: ensure speed is never below minimum
+      adjustedSpeed = Math.max(400, adjustedSpeed);
       
       // Calculate distance
       const averageSpeed = (racer.currentSpeed + adjustedSpeed) / 2;
