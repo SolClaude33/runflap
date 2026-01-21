@@ -75,6 +75,7 @@ export default function RacePage() {
   const finalizingRaceRef = useRef<Set<number>>(new Set()); // Track races being finalized to prevent duplicates
   const winnerDetectedRef = useRef<Map<number, number>>(new Map()); // Track detected winner per race to ensure consistency
   const verifiedFinalizedRef = useRef<Set<number>>(new Set()); // Track races verified as finalized to prevent re-checks
+  const determiningWinnerRef = useRef<Map<number, boolean>>(new Map()); // Evitar múltiples llamadas a determineWinner
   
   // Guardar timestamps del contrato para countdown local suave
   const contractTimestampsRef = useRef<{
@@ -132,6 +133,7 @@ export default function RacePage() {
           winnerDetectedRef.current.delete(raceNumber); // Clear old race
           finalizingRaceRef.current.delete(raceNumber); // Clear old race finalization
           verifiedFinalizedRef.current.delete(raceNumber); // Clear old race verification
+          determiningWinnerRef.current.delete(raceNumber); // Clear determining winner flag
           setContractWinner(null); // Clear contract winner for new race
           
           // Si cambió la carrera, obtener info de la carrera anterior
@@ -201,10 +203,13 @@ export default function RacePage() {
             setRaceState('pre_countdown');
             
             // CRITICAL: Determinar ganador DURANTE el countdown para que el frontend tenga tiempo de preparar la carrera
-            // Solo si aún no se ha determinado y tenemos signer
-            if (info.winner === 0 && signer) {
+            // Solo si aún no se ha determinado, tenemos signer, y no estamos ya intentando determinarlo
+            if (info.winner === 0 && signer && !determiningWinnerRef.current.get(currentRace)) {
               // Verificar que el betting haya terminado
               if (now >= bettingEndTime) {
+                // Marcar que estamos intentando determinar el ganador para evitar múltiples llamadas
+                determiningWinnerRef.current.set(currentRace, true);
+                
                 try {
                   console.log(`[Race ${currentRace}] 🎲 Attempting to determine winner during countdown (now: ${now}, betting ended: ${bettingEndTime})`);
                   const result = await determineWinner(signer, currentRace);
@@ -216,10 +221,16 @@ export default function RacePage() {
                     }, 2000);
                   } else {
                     console.warn(`[Race ${currentRace}] ⚠️ Winner determination returned: ${result.error}`);
+                    // Si falló, permitir intentar de nuevo después de un tiempo
+                    setTimeout(() => {
+                      determiningWinnerRef.current.delete(currentRace);
+                    }, 5000);
                   }
                 } catch (error: any) {
                   // Loggear todos los errores para debugging
                   const errorMsg = error.reason || error.message || 'Unknown error';
+                  console.error(`[Race ${currentRace}] ❌ Error determining winner:`, errorMsg, error);
+                  
                   if (errorMsg.includes('Betting period not finished')) {
                     console.warn(`[Race ${currentRace}] ⏳ Betting period not finished yet (now: ${now}, betting ends: ${bettingEndTime})`);
                   } else if (errorMsg.includes('already determined') || errorMsg.includes('Winner already')) {
@@ -229,7 +240,16 @@ export default function RacePage() {
                       fetchRaceData();
                     }, 1000);
                   } else {
-                    console.error(`[Race ${currentRace}] ❌ Error determining winner:`, errorMsg);
+                    // Si es un error de transacción (usuario rechazó, etc.), permitir intentar de nuevo
+                    if (errorMsg.includes('user rejected') || errorMsg.includes('User rejected') || error.code === 4001) {
+                      console.log(`[Race ${currentRace}] ⚠️ User rejected transaction, will retry`);
+                      determiningWinnerRef.current.delete(currentRace);
+                    } else {
+                      // Para otros errores, esperar un poco antes de permitir reintento
+                      setTimeout(() => {
+                        determiningWinnerRef.current.delete(currentRace);
+                      }, 10000);
+                    }
                   }
                 }
               }
@@ -245,47 +265,17 @@ export default function RacePage() {
             console.log(`[Race ${currentRace}] 🏎️ Race visual in progress (now: ${now}, ends: ${raceVisualEndTime}). State: RACING`);
             setRaceState('racing');
             
-            // CRITICAL: Intentar determinar ganador AHORA que el countdown terminó
-            // Solo si aún no se ha determinado y tenemos signer
-            if (info.winner === 0 && signer) {
-              // Verificar que realmente haya pasado el tiempo necesario
-              if (now >= winnerDeterminedTime) {
-                try {
-                  console.log(`[Race ${currentRace}] 🎲 Attempting to determine winner (now: ${now}, required: ${winnerDeterminedTime})`);
-                  const result = await determineWinner(signer, currentRace);
-                  if (result.success) {
-                    console.log(`[Race ${currentRace}] ✅ Winner determination successful`);
-                    // Recargar datos después de un breve delay para obtener el ganador
-                    setTimeout(() => {
-                      fetchRaceData();
-                    }, 2000);
-                  } else {
-                    console.warn(`[Race ${currentRace}] ⚠️ Winner determination returned: ${result.error}`);
-                  }
-                } catch (error: any) {
-                  // Loggear todos los errores para debugging
-                  const errorMsg = error.reason || error.message || 'Unknown error';
-                  if (errorMsg.includes('Countdown not finished')) {
-                    console.warn(`[Race ${currentRace}] ⏳ Countdown not finished yet (now: ${now}, required: ${winnerDeterminedTime})`);
-                  } else if (errorMsg.includes('already determined') || errorMsg.includes('Winner already')) {
-                    console.log(`[Race ${currentRace}] ✅ Winner already determined`);
-                    // Recargar datos para obtener el ganador
-                    setTimeout(() => {
-                      fetchRaceData();
-                    }, 1000);
-                  } else {
-                    console.error(`[Race ${currentRace}] ❌ Error determining winner:`, errorMsg);
-                  }
-                }
-              } else {
-                console.warn(`[Race ${currentRace}] ⏳ Cannot determine winner yet (now: ${now}, required: ${winnerDeterminedTime})`);
-              }
-            }
-            
-            // Si el ganador ya está determinado, actualizarlo
+            // El ganador debería estar determinado durante el countdown
+            // Solo actualizar si ya está determinado - NO intentar determinar durante la carrera visual
+            // para evitar múltiples transacciones de MetaMask
             if (info.winner > 0 && info.winner !== contractWinner) {
               setContractWinner(info.winner);
               setLastWinner(info.winner);
+              console.log(`[Race ${currentRace}] 🎯 Contract winner updated: Car ${info.winner}`);
+            } else if (info.winner === 0) {
+              // Si aún no hay ganador, el cron job debería determinarlo
+              // No intentar desde el frontend durante la carrera visual para evitar múltiples transacciones
+              console.warn(`[Race ${currentRace}] ⚠️ Winner not determined yet, waiting for cron job`);
             }
           } else {
             // Race finished
