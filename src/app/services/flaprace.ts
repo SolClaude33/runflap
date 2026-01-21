@@ -518,6 +518,11 @@ const FLAPRACE_ABI = [
 				"type": "uint256"
 			}
 		],
+		"name": "determineWinner",
+		"outputs": [],
+		"stateMutability": "nonpayable",
+		"type": "function"
+	},
 	{
 		"inputs": [
 			{
