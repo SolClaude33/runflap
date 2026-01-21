@@ -1,1 +1,8 @@
-{}
+{
+  "crons": [
+    {
+      "path": "/api/race/determine-winner",
+      "schedule": "*/1 * * * *"
+    }
+  ]
+}
