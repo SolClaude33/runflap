@@ -132,7 +132,7 @@ export default function RacePage() {
           winnerDetectedRef.current.delete(raceNumber); // Clear old race
           finalizingRaceRef.current.delete(raceNumber); // Clear old race finalization
           verifiedFinalizedRef.current.delete(raceNumber); // Clear old race verification
-          setCalculatedWinner(null); // Clear calculated winner for new race
+          setContractWinner(null); // Clear contract winner for new race
           
           // Si cambió la carrera, obtener info de la carrera anterior
           if (currentRace > 0 && raceNumber > 0) {
