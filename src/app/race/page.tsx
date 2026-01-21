@@ -227,8 +227,17 @@ export default function RacePage() {
                   }, 2000);
                 } else {
                   console.warn(`[Race ${currentRace}] ⚠️ ${data.message || data.error || 'Waiting for winner determination...'}`);
-                  // Si no se pudo determinar (aún no es el momento), permitir reintentar
-                  if (data.message?.includes('not ended') || data.message?.includes('already determined') || data.error?.includes('already determined')) {
+                  // Si dice "winner already determined" pero el contrato muestra winner: 0, 
+                  // hay un problema - permitir reintentar
+                  if (data.message?.includes('winner already determined')) {
+                    console.warn(`[Race ${currentRace}] ⚠️ Server says winner determined but contract shows winner: 0. Will retry...`);
+                    // Recargar datos para verificar el estado real
+                    setTimeout(() => {
+                      fetchRaceData();
+                      determiningWinnerRef.current.delete(currentRace);
+                    }, 5000);
+                  } else if (data.message?.includes('not ended')) {
+                    // Aún no es el momento, permitir reintentar
                     determiningWinnerRef.current.delete(currentRace);
                   } else {
                     // Para otros errores, permitir reintentar después de un tiempo

@@ -173,7 +173,11 @@ export default function RaceTrack({ raceState, countdown, preCountdown, onRaceEn
     if ((raceState === 'countdown' || raceState === 'racing') && totalLength > 0 && !racersReady && raceId >= 0) {
       // Use deterministic seed based on raceId and raceStartTime
       // This ensures all clients use the same seed for consistent visual simulation
-      const deterministicSeed = (raceId * 7919 + Math.floor(raceStartTime || 0) * 3571) >>> 0;
+      // CRITICAL: Use Math.floor to ensure consistent seed calculation across browsers
+      const raceStartTimeFloor = Math.floor(raceStartTime || 0);
+      const deterministicSeed = (raceId * 7919 + raceStartTimeFloor * 3571) >>> 0;
+      
+      console.log(`[RaceTrack] Initializing race ${raceId} with seed: ${deterministicSeed} (raceStartTime: ${raceStartTime}, floor: ${raceStartTimeFloor})`);
       
       // CRITICAL: Ensure seed is a 32-bit unsigned integer for consistent PRNG
       const normalizedSeed = (deterministicSeed >>> 0);

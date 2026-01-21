@@ -88,12 +88,14 @@ async function handleWinnerDetermination(requestedRaceId: number | null) {
     const now = Math.floor(Date.now() / 1000);
     const bettingEndTimeNum = Number(bettingEndTime);
     const winnerDeterminedTimeNum = Number(winnerDeterminedTime);
+    const winnerNum = Number(winner);
 
-    console.log(`[Winner Determination] Race ${targetRaceId}: betting ended? ${now >= bettingEndTimeNum}, countdown finished? ${now >= winnerDeterminedTimeNum}, winner determined? ${Number(winner) > 0}`);
+    console.log(`[Winner Determination] Race ${targetRaceId}: betting ended? ${now >= bettingEndTimeNum}, countdown finished? ${now >= winnerDeterminedTimeNum}, winner: ${winnerNum}, finalized: ${finalized}`);
 
     // Determinar ganador durante el countdown (después de que termine el betting)
     // Esto le da tiempo al frontend para preparar la carrera visual
-    if (now >= bettingEndTimeNum && Number(winner) === 0 && Number(startTime) > 0) {
+    // CRITICAL: Verificar que winner sea realmente 0, no solo truthy/falsy
+    if (now >= bettingEndTimeNum && winnerNum === 0 && Number(startTime) > 0) {
       console.log(`[Winner Determination] Determining winner for race ${targetRaceId}...`);
       
       try {
@@ -123,13 +125,26 @@ async function handleWinnerDetermination(requestedRaceId: number | null) {
         throw error;
       }
     } else {
+      // CRITICAL: Only say "winner already determined" if winner is actually > 0
+      // If winner is 0, we should try to determine it
       const reason = 
         Number(startTime) === 0 ? 'race not started' :
         now < bettingEndTimeNum ? 'betting period not ended yet' :
-        Number(winner) > 0 ? 'winner already determined' :
-        'unknown reason';
+        winnerNum > 0 ? `winner already determined (winner: ${winnerNum})` :
+        'unknown reason (winner is 0, but conditions not met)';
       
-      console.log(`[Winner Determination] No winner determination needed: ${reason}`);
+      console.log(`[Winner Determination] Race ${targetRaceId} - No action needed: ${reason}`);
+      console.log(`[Winner Determination] Details: startTime=${startTime}, bettingEndTime=${bettingEndTimeNum}, now=${now}, winner=${winnerNum}, finalized=${finalized}`);
+      
+      // If winner is 0 but betting ended, this is an error state - return error, not success
+      if (now >= bettingEndTimeNum && winnerNum === 0 && Number(startTime) > 0) {
+        console.error(`[Winner Determination] ERROR: Race ${targetRaceId} betting ended but winner is 0. This should not happen.`);
+        return NextResponse.json({
+          success: false,
+          raceId: targetRaceId.toString(),
+          error: `Race ${targetRaceId} betting ended but winner determination failed. Please retry.`,
+        }, { status: 500 });
+      }
       
       return NextResponse.json({
         success: true,
