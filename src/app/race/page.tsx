@@ -206,6 +206,7 @@ export default function RacePage() {
             // Usar un flag para evitar múltiples llamadas
             if (info.winner === 0 && now >= bettingEndTime && !determiningWinnerRef.current.get(currentRace)) {
               determiningWinnerRef.current.set(currentRace, true);
+              console.log(`[Race ${currentRace}] 🎲 Calling server to determine winner (now: ${now}, betting ended: ${bettingEndTime})`);
               
               // Llamar al endpoint del servidor para que determine el ganador
               // El servidor usará OWNER_PRIVATE_KEY, no requiere wallet del usuario
@@ -216,6 +217,7 @@ export default function RacePage() {
               })
               .then(async (res) => {
                 const data = await res.json();
+                console.log(`[Race ${currentRace}] Server response:`, data);
                 if (data.success) {
                   console.log(`[Race ${currentRace}] ✅ Winner determined by server: ${data.message}`);
                   // Recargar datos después de un breve delay
@@ -223,19 +225,24 @@ export default function RacePage() {
                     fetchRaceData();
                   }, 2000);
                 } else {
-                  console.log(`[Race ${currentRace}] ⏳ ${data.message || 'Waiting for winner determination...'}`);
+                  console.warn(`[Race ${currentRace}] ⚠️ ${data.message || data.error || 'Waiting for winner determination...'}`);
                   // Si no se pudo determinar (aún no es el momento), permitir reintentar
-                  if (data.message?.includes('not ended') || data.message?.includes('already determined')) {
+                  if (data.message?.includes('not ended') || data.message?.includes('already determined') || data.error?.includes('already determined')) {
                     determiningWinnerRef.current.delete(currentRace);
+                  } else {
+                    // Para otros errores, permitir reintentar después de un tiempo
+                    setTimeout(() => {
+                      determiningWinnerRef.current.delete(currentRace);
+                    }, 10000);
                   }
                 }
               })
               .catch(err => {
-                console.log(`[Race ${currentRace}] Server-side winner determination attempted`);
+                console.error(`[Race ${currentRace}] ❌ Error calling determine-winner endpoint:`, err);
                 // Permitir reintentar después de un tiempo
                 setTimeout(() => {
                   determiningWinnerRef.current.delete(currentRace);
-                }, 5000);
+                }, 10000);
               });
             }
             
@@ -252,16 +259,39 @@ export default function RacePage() {
             setRaceState('racing');
             
             // El ganador debería estar determinado durante el countdown
-            // Solo actualizar si ya está determinado - NO intentar determinar durante la carrera visual
-            // para evitar múltiples transacciones de MetaMask
+            // Si aún no está determinado, intentar llamar al endpoint (puede que haya fallado antes)
             if (info.winner > 0 && info.winner !== contractWinner) {
               setContractWinner(info.winner);
               setLastWinner(info.winner);
               console.log(`[Race ${currentRace}] 🎯 Contract winner updated: Car ${info.winner}`);
-            } else if (info.winner === 0) {
-              // Si aún no hay ganador, el cron job debería determinarlo
-              // No intentar desde el frontend durante la carrera visual para evitar múltiples transacciones
-              console.warn(`[Race ${currentRace}] ⚠️ Winner not determined yet, waiting for cron job`);
+            } else if (info.winner === 0 && now >= bettingEndTime && !determiningWinnerRef.current.get(currentRace)) {
+              // Si aún no hay ganador y el betting terminó, intentar determinar
+              determiningWinnerRef.current.set(currentRace, true);
+              console.log(`[Race ${currentRace}] 🎲 Retrying winner determination during race visual (now: ${now}, betting ended: ${bettingEndTime})`);
+              
+              fetch('/api/race/determine-winner', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ raceId: currentRace })
+              })
+              .then(async (res) => {
+                const data = await res.json();
+                if (data.success) {
+                  console.log(`[Race ${currentRace}] ✅ Winner determined: ${data.message}`);
+                  setTimeout(() => fetchRaceData(), 2000);
+                } else {
+                  console.warn(`[Race ${currentRace}] ⚠️ ${data.message || data.error || 'Still waiting...'}`);
+                  setTimeout(() => {
+                    determiningWinnerRef.current.delete(currentRace);
+                  }, 10000);
+                }
+              })
+              .catch(err => {
+                console.error(`[Race ${currentRace}] ❌ Error:`, err);
+                setTimeout(() => {
+                  determiningWinnerRef.current.delete(currentRace);
+                }, 10000);
+              });
             }
           } else {
             // Race visual period ended - but check if contract is finalized
