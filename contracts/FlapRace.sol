@@ -150,15 +150,16 @@ contract FlapRace {
 
     /**
      * @dev Determine winner automatically using blockhash + deterministic data
-     * Can be called by anyone after winnerDeterminedTime
+     * Can be called by anyone after betting ends (during countdown)
      * Uses blockhash of the block when betting ended + race data for randomness
      * This ensures randomness while being verifiable
+     * Winner is determined during countdown so frontend can prepare the visual race
      */
     function determineWinner(uint256 raceId) external {
         Race storage race = races[raceId];
         require(race.startTime > 0, "Race does not exist");
         require(race.winner == 0, "Winner already determined");
-        require(block.timestamp >= race.winnerDeterminedTime, "Countdown not finished yet");
+        require(block.timestamp >= race.bettingEndTime, "Betting period not finished yet");
         
         // Get blockhash of the block when betting ended (or closest available)
         // Use block.number - 1 to get a finalized block (blockhash is only available for last 256 blocks)

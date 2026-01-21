@@ -83,8 +83,9 @@ async function handleWinnerDetermination(requestedRaceId: number | null) {
 
     console.log(`[Winner Determination] Race ${targetRaceId}: betting ended? ${now >= bettingEndTimeNum}, countdown finished? ${now >= winnerDeterminedTimeNum}, winner determined? ${Number(winner) > 0}`);
 
-    // Si el countdown terminó y el ganador no se ha determinado, determinarlo
-    if (now >= winnerDeterminedTimeNum && Number(winner) === 0 && Number(startTime) > 0) {
+    // Determinar ganador durante el countdown (después de que termine el betting)
+    // Esto le da tiempo al frontend para preparar la carrera visual
+    if (now >= bettingEndTimeNum && Number(winner) === 0 && Number(startTime) > 0) {
       console.log(`[Winner Determination] Determining winner for race ${targetRaceId}...`);
       
       try {
@@ -117,7 +118,6 @@ async function handleWinnerDetermination(requestedRaceId: number | null) {
       const reason = 
         Number(startTime) === 0 ? 'race not started' :
         now < bettingEndTimeNum ? 'betting period not ended yet' :
-        now < winnerDeterminedTimeNum ? 'countdown not finished yet' :
         Number(winner) > 0 ? 'winner already determined' :
         'unknown reason';
       
