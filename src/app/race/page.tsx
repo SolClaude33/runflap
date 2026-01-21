@@ -74,6 +74,7 @@ export default function RacePage() {
   const finalizingRaceRef = useRef<Set<number>>(new Set()); // Track races being finalized to prevent duplicates
   const winnerDetectedRef = useRef<Map<number, number>>(new Map()); // Track detected winner per race to ensure consistency
   const verifiedFinalizedRef = useRef<Set<number>>(new Set()); // Track races verified as finalized to prevent re-checks
+  const determiningWinnerRef = useRef<Map<number, boolean>>(new Map()); // Evitar múltiples llamadas al endpoint de determinar ganador
   
   // Guardar timestamps del contrato para countdown local suave
   const contractTimestampsRef = useRef<{
