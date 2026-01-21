@@ -127,8 +127,15 @@ export default function RacePage() {
       try {
         currentRace = await callWithTimeout(getCurrentRaceId(provider), 5000, 'Failed to get race ID');
         
-        // CRITICAL: Clear winner detection when race changes
-        if (currentRace !== raceNumber) {
+        // CRITICAL: Don't switch to next race if current race visual is still running
+        // The contract may have finalized the race and moved to next, but we should
+        // continue showing the current race until the visual finishes
+        const shouldSwitchRace = currentRace !== raceNumber && 
+          (raceState === 'betting' || raceState === 'finished' || 
+           (raceInfo && raceInfo.finalized && raceInfo.winner > 0 && 
+            Date.now() / 1000 >= (raceInfo.claimingStartTime || 0)));
+        
+        if (shouldSwitchRace) {
           winnerDetectedRef.current.delete(raceNumber); // Clear old race
           finalizingRaceRef.current.delete(raceNumber); // Clear old race finalization
           verifiedFinalizedRef.current.delete(raceNumber); // Clear old race verification
@@ -146,6 +153,11 @@ export default function RacePage() {
               // Silenciar errores al obtener carrera anterior
             }
           }
+        } else if (currentRace !== raceNumber) {
+          // Contract moved to next race, but visual is still running - keep showing current race
+          console.log(`[Race ${raceNumber}] Contract moved to race ${currentRace}, but visual still running. Keeping race ${raceNumber} visible.`);
+          // Use the current race number instead of the contract's current race
+          currentRace = raceNumber;
         }
         
         setRaceNumber(currentRace);
