@@ -45,15 +45,23 @@ async function handleWinnerDetermination(requestedRaceId: number | null) {
     console.log(`[Winner Determination] Checking if winner determination is needed${requestedRaceId !== null ? ` for race ${requestedRaceId}` : ''}...`);
 
     if (!OWNER_PRIVATE_KEY) {
+      console.error('[Winner Determination] ❌ OWNER_PRIVATE_KEY not configured in environment variables');
       return NextResponse.json(
-        { error: 'Owner private key not configured' },
+        { 
+          success: false,
+          error: 'Owner private key not configured. Please set OWNER_PRIVATE_KEY in Vercel environment variables.' 
+        },
         { status: 500 }
       );
     }
 
     if (!FLAPRACE_ADDRESS) {
+      console.error('[Winner Determination] ❌ NEXT_PUBLIC_FLAPRACE_ADDRESS not configured in environment variables');
       return NextResponse.json(
-        { error: 'Contract address not configured' },
+        { 
+          success: false,
+          error: 'Contract address not configured. Please set NEXT_PUBLIC_FLAPRACE_ADDRESS in Vercel environment variables.' 
+        },
         { status: 500 }
       );
     }
