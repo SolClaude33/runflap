@@ -29,13 +29,13 @@ const TOTAL_LAPS = 5;
 const RACE_DURATION_SECONDS = 30; // Match raceSimulation.ts
 
 interface RaceTrackProps {
-  raceState: 'betting' | 'pre_countdown' | 'countdown' | 'racing' | 'finished';
+  raceState: 'betting' | 'countdown' | 'racing' | 'finished';
   countdown: number | null;
-  preCountdown?: number | null; // Countdown timer (10 seconds after betting closes)
   onRaceEnd: (winner: number) => void;
   raceId: number; // ID de la carrera
-  raceStartTime: number; // Timestamp del contrato cuando empieza la carrera visual (winnerDeterminedTime)
-  contractWinner?: number | null; // Winner determined by contract (after countdown)
+  raceStartTime: number; // Timestamp cuando empieza la carrera visual
+  raceSeed: number; // Seed determinístico para la simulación
+  raceWinner: number | null; // Ganador pre-determinado
 }
 
 // Professional F1/NASCAR hybrid oval track - clean racing circuit
@@ -82,7 +82,7 @@ const createInitialRacers = (seed: number = 0): Racer[] => {
   });
 };
 
-export default function RaceTrack({ raceState, countdown, preCountdown, onRaceEnd, raceId, raceStartTime, contractWinner }: RaceTrackProps) {
+export default function RaceTrack({ raceState, countdown, onRaceEnd, raceId, raceStartTime, raceSeed, raceWinner }: RaceTrackProps) {
   const [racers, setRacers] = useState<Racer[]>(createInitialRacers());
   const [winner, setWinner] = useState<Racer | null>(null);
   const [totalLength, setTotalLength] = useState<number>(0);
@@ -168,19 +168,10 @@ export default function RaceTrack({ raceState, countdown, preCountdown, onRaceEn
 
   useEffect(() => {
     // CRITICAL: Initialize racers when race state changes to countdown or racing
-    // Use deterministic seed based on raceId and raceStartTime (winnerDeterminedTime)
-    // The contract determines the winner, but we use a seed for visual simulation
-    if ((raceState === 'countdown' || raceState === 'racing') && totalLength > 0 && !racersReady && raceId >= 0) {
-      // Use deterministic seed based on raceId and raceStartTime
-      // This ensures all clients use the same seed for consistent visual simulation
-      // CRITICAL: Use Math.floor to ensure consistent seed calculation across browsers
-      const raceStartTimeFloor = Math.floor(raceStartTime || 0);
-      const deterministicSeed = (raceId * 7919 + raceStartTimeFloor * 3571) >>> 0;
-      
-      console.log(`[RaceTrack] Initializing race ${raceId} with seed: ${deterministicSeed} (raceStartTime: ${raceStartTime}, floor: ${raceStartTimeFloor})`);
-      
-      // CRITICAL: Ensure seed is a 32-bit unsigned integer for consistent PRNG
-      const normalizedSeed = (deterministicSeed >>> 0);
+    // Use the provided seed and winner to ensure all clients see the same race
+    if ((raceState === 'countdown' || raceState === 'racing') && totalLength > 0 && !racersReady && raceId >= 0 && raceSeed > 0) {
+      // Use the provided seed (deterministic across all clients)
+      const normalizedSeed = (raceSeed >>> 0);
       seedRef.current = normalizedSeed;
       rngRef.current = createPRNG(normalizedSeed);
       tickCounterRef.current = 0;
@@ -191,31 +182,26 @@ export default function RaceTrack({ raceState, countdown, preCountdown, onRaceEn
       setWinner(null);
       winnerFoundRef.current = false;
       
-      // CRITICAL: Calculate initial race time from contract
-      // This ensures all clients start from the same point
+      // Calculate initial race time from raceStartTime
       const now = Date.now() / 1000;
       const actualRaceStartTime = raceStartTime > 0 ? raceStartTime : now;
-      const initialContractRaceTime = Math.max(0, now - actualRaceStartTime);
-      raceTimeRef.current = initialContractRaceTime;
-      previousContractTimeRef.current = initialContractRaceTime; // Initialize previous contract time for deterministic deltaTime
+      const initialRaceTime = Math.max(0, now - actualRaceStartTime);
+      raceTimeRef.current = initialRaceTime;
+      previousContractTimeRef.current = initialRaceTime;
       
-      // CRITICAL: Pre-consume RNG to sync with current contract time
-      // This ensures clients connecting late are synchronized
-      const initialTimeBasedTick = Math.floor(initialContractRaceTime * 10); // 10 ticks per second
-      // Pre-consume RNG for all ticks that have already passed
-      // This makes the RNG state identical for all clients regardless of when they connected
-      // Limit pre-consumption to prevent performance issues (max 300 ticks = 30 seconds)
+      // Pre-consume RNG to sync with current race time
+      const initialTimeBasedTick = Math.floor(initialRaceTime * 10); // 10 ticks per second
       const maxPreConsume = Math.min(initialTimeBasedTick, 300);
       for (let i = 0; i < maxPreConsume; i++) {
         rngRef.current(); // Consume RNG without using the value
       }
       tickCounterRef.current = maxPreConsume;
-      lastProcessedTickRef.current = maxPreConsume; // Initialize last processed tick
+      lastProcessedTickRef.current = maxPreConsume;
       
       setRacersReady(true);
-      console.log(`[RaceTrack] ✅ Initialized race ${raceId} with seed ${normalizedSeed}, contract winner: ${contractWinner || 'not determined yet'}`);
+      console.log(`[RaceTrack] ✅ Initialized race ${raceId} with seed ${normalizedSeed}, winner: Car ${raceWinner || 'not determined yet'}`);
     }
-  }, [raceState, totalLength, racersReady, raceId, raceStartTime, contractWinner]);
+  }, [raceState, totalLength, racersReady, raceId, raceStartTime, raceSeed, raceWinner]);
 
   useEffect(() => {
     if (raceState === 'betting' || raceState === 'finished') {
@@ -284,19 +270,17 @@ export default function RaceTrack({ raceState, countdown, preCountdown, onRaceEn
       const frameDelta = (currentTime - lastTimeRef.current) / 1000; // Convert to seconds
       lastTimeRef.current = currentTime;
 
-      // CRITICAL: Use contract time as absolute source of truth for synchronization
-      // This ensures all clients see the same race progression
-      const now = Date.now() / 1000; // Use milliseconds precision for smooth animation
+      // Use race start time as absolute source of truth for synchronization
+      const now = Date.now() / 1000;
       const actualRaceStartTime = raceStartTime > 0 ? raceStartTime : now;
-      const contractRaceTime = Math.max(0, now - actualRaceStartTime);
+      const raceTime = Math.max(0, now - actualRaceStartTime);
       
-      // CRITICAL: Update raceTimeRef to contract time for synchronization
-      raceTimeRef.current = contractRaceTime;
+      // Update raceTimeRef for synchronization
+      raceTimeRef.current = raceTime;
       
-      // CRITICAL: Process all ticks that have passed since the last frame
-      // This ensures deterministic state updates matching raceSimulation.ts exactly
+      // Process all ticks that have passed since the last frame
       // Each tick represents 0.1 seconds (10 ticks per second)
-      const targetTick = Math.floor(contractRaceTime * 10); // 10 ticks per second
+      const targetTick = Math.floor(raceTime * 10); // 10 ticks per second
       let currentRacers = racersRef.current;
       let updatedRacers = [...currentRacers]; // Create a mutable copy
 
@@ -306,7 +290,7 @@ export default function RaceTrack({ raceState, countdown, preCountdown, onRaceEn
       const ticksToProcess = Math.min(targetTick - lastProcessedTickRef.current, 5);
       for (let i = 0; i < ticksToProcess; i++) {
         const tick = lastProcessedTickRef.current + i;
-        const tickContractTime = tick / 10; // Convert tick to contract time
+        const tickRaceTime = tick / 10; // Convert tick to race time
         const tickDeltaTime = 0.1; // Each tick represents 0.1 seconds
 
         // Re-calculate racer distances for accurate leader/position for this tick
@@ -339,8 +323,15 @@ export default function RaceTrack({ raceState, countdown, preCountdown, onRaceEn
             }
             
             const distanceBehind = leaderDist - racerTotalDist;
-            const timeRemaining = RACE_DURATION_SECONDS - tickContractTime;
+            const timeRemaining = RACE_DURATION_SECONDS - tickRaceTime;
             const isFinalSeconds = timeRemaining <= 5;
+            
+            // CRITICAL: Give winner a boost in the last two laps to ensure they win visually
+            const isLastTwoLaps = racer.lap >= 4;
+            if (raceWinner && isLastTwoLaps && racer.id === raceWinner) {
+              // Boost for winner in final laps
+              newTargetSpeed *= 1.20 + rngRef.current() * 0.10; // 20-30% boost
+            }
             
             // CRITICAL: Keep logic deterministic - NO modifications based on calculatedWinner
             // The visual boost will be applied only in the visual interpolation layer
@@ -367,18 +358,18 @@ export default function RaceTrack({ raceState, countdown, preCountdown, onRaceEn
               newTargetSpeed *= 0.85 + rngRef.current() * 0.30;
             }
             
-            newTargetSpeed = Math.max(450, Math.min(700, newTargetSpeed)); // Increased min to 450 and max to 700 to ensure race completion
-            newLastSpeedChange = tickContractTime;
+            newTargetSpeed = Math.max(450, Math.min(700, newTargetSpeed));
+            newLastSpeedChange = tickRaceTime;
           }
           
           const speedLerp = 0.20;
-          const timeSinceSpeedChange = tickContractTime - racer.lastSpeedChange;
+          const timeSinceSpeedChange = tickRaceTime - racer.lastSpeedChange;
           const lerpFactor = Math.min(1.0, timeSinceSpeedChange * (1 / speedLerp));
           const newSpeed = racer.currentSpeed + (newTargetSpeed - racer.currentSpeed) * lerpFactor;
           
           const totalDistanceNeeded = totalLength * TOTAL_LAPS;
           const distanceRemaining = totalDistanceNeeded - racerTotalDist;
-          const timeRemaining = Math.max(0.1, RACE_DURATION_SECONDS - tickContractTime);
+          const timeRemaining = Math.max(0.1, RACE_DURATION_SECONDS - tickRaceTime);
           
           const isFinalSeconds = timeRemaining <= 5;
           let adjustedSpeed = newSpeed;
@@ -446,19 +437,16 @@ export default function RaceTrack({ raceState, countdown, preCountdown, onRaceEn
         let visualSpeed = racer.currentSpeed;
         
         // Apply visual boost to contract winner in last 2 laps (visual only, doesn't affect logic)
-        // CRITICAL: Use deterministic calculation based on contract race time to ensure consistency across browsers
-        // This ensures the same boost is applied at the same time in all browsers, regardless of frame rate
+        // Apply visual boost for winner in last two laps
         const isLastTwoLaps = racer.lap >= 4;
-        if (contractWinner && isLastTwoLaps && racer.id === contractWinner) {
-          // Calculate deterministic boost based on contract race time (rounded to nearest 0.1s for consistency)
-          // Use the current tick to ensure deterministic calculation
-          const currentTick = Math.floor(contractRaceTime * 10);
-          // Create deterministic "random" value using tick and racer ID
-          const tickValue = (currentTick * 7919 + racer.id * 3571) % 1000; // Prime numbers for better distribution
-          const normalizedValue = tickValue / 1000; // 0-1 range
+        if (raceWinner && isLastTwoLaps && racer.id === raceWinner) {
+          // Calculate deterministic boost based on race time
+          const currentTick = Math.floor(raceTime * 10);
+          const tickValue = (currentTick * 7919 + racer.id * 3571) % 1000;
+          const normalizedValue = tickValue / 1000;
           const winnerVisualBoost = racer.lap === TOTAL_LAPS 
-            ? 1.15 + (normalizedValue * 0.10) // 15-25% boost on final lap (deterministic)
-            : 1.10 + (normalizedValue * 0.05); // 10-15% boost on lap 4 (deterministic)
+            ? 1.15 + (normalizedValue * 0.10) // 15-25% boost on final lap
+            : 1.10 + (normalizedValue * 0.05); // 10-15% boost on lap 4
           visualSpeed *= winnerVisualBoost;
         }
         
@@ -490,7 +478,7 @@ export default function RaceTrack({ raceState, countdown, preCountdown, onRaceEn
 
       // CRITICAL: ONLY determine winner when race time reaches RACE_DURATION_SECONDS
       // This ensures the winner matches the deterministic calculation in raceSimulation.ts
-      if (contractRaceTime >= RACE_DURATION_SECONDS && !winnerFoundRef.current) {
+      if (raceTime >= RACE_DURATION_SECONDS && !winnerFoundRef.current) {
         const finalRacersState = updatedRacers.map(r => ({
           id: r.id,
           totalDist: (r.lap - 1) * totalLength + r.distance
@@ -512,7 +500,7 @@ export default function RaceTrack({ raceState, countdown, preCountdown, onRaceEn
               distance: Math.min(winnerRacer.distance, totalLength),
               lap: Math.min(winnerRacer.lap, TOTAL_LAPS),
               finished: true,
-              finishTime: contractRaceTime,
+              finishTime: raceTime,
             };
             setWinner(raceWinner);
             setShowConfetti(true);
