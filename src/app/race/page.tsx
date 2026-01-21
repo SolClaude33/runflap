@@ -204,6 +204,7 @@ export default function RacePage() {
             // Intentar determinar ganador automáticamente llamando al endpoint del servidor
             // Esto no requiere wallet del usuario, el servidor usa OWNER_PRIVATE_KEY
             // Usar un flag para evitar múltiples llamadas
+            console.log(`[Race ${currentRace}] 🔍 Countdown check - winner: ${info.winner}, now: ${now}, bettingEndTime: ${bettingEndTime}, flag: ${determiningWinnerRef.current.get(currentRace)}`);
             if (info.winner === 0 && now >= bettingEndTime && !determiningWinnerRef.current.get(currentRace)) {
               determiningWinnerRef.current.set(currentRace, true);
               console.log(`[Race ${currentRace}] 🎲 Calling server to determine winner (now: ${now}, betting ended: ${bettingEndTime})`);
@@ -260,14 +261,21 @@ export default function RacePage() {
             
             // El ganador debería estar determinado durante el countdown
             // Si aún no está determinado, intentar llamar al endpoint (puede que haya fallado antes)
+            console.log(`[Race ${currentRace}] 🔍 Race visual check - winner: ${info.winner}, now: ${now}, bettingEndTime: ${bettingEndTime}, flag: ${determiningWinnerRef.current.get(currentRace)}`);
             if (info.winner > 0 && info.winner !== contractWinner) {
               setContractWinner(info.winner);
               setLastWinner(info.winner);
               console.log(`[Race ${currentRace}] 🎯 Contract winner updated: Car ${info.winner}`);
-            } else if (info.winner === 0 && now >= bettingEndTime && !determiningWinnerRef.current.get(currentRace)) {
+            } else if (info.winner === 0 && now >= bettingEndTime) {
               // Si aún no hay ganador y el betting terminó, intentar determinar
-              determiningWinnerRef.current.set(currentRace, true);
-              console.log(`[Race ${currentRace}] 🎲 Retrying winner determination during race visual (now: ${now}, betting ended: ${bettingEndTime})`);
+              // Resetear el flag cada 15 segundos para permitir reintentos
+              const shouldRetry = !determiningWinnerRef.current.get(currentRace) || 
+                                  (Date.now() - (determiningWinnerRef.current.get(currentRace) as any)?.lastAttempt || 0) > 15000;
+              
+              if (shouldRetry) {
+                determiningWinnerRef.current.set(currentRace, true);
+                (determiningWinnerRef.current.get(currentRace) as any).lastAttempt = Date.now();
+                console.log(`[Race ${currentRace}] 🎲 Retrying winner determination during race visual (now: ${now}, betting ended: ${bettingEndTime})`);
               
               fetch('/api/race/determine-winner', {
                 method: 'POST',
