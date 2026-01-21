@@ -266,16 +266,10 @@ export default function RacePage() {
               setContractWinner(info.winner);
               setLastWinner(info.winner);
               console.log(`[Race ${currentRace}] 🎯 Contract winner updated: Car ${info.winner}`);
-            } else if (info.winner === 0 && now >= bettingEndTime) {
+            } else if (info.winner === 0 && now >= bettingEndTime && !determiningWinnerRef.current.get(currentRace)) {
               // Si aún no hay ganador y el betting terminó, intentar determinar
-              // Resetear el flag cada 15 segundos para permitir reintentos
-              const shouldRetry = !determiningWinnerRef.current.get(currentRace) || 
-                                  (Date.now() - (determiningWinnerRef.current.get(currentRace) as any)?.lastAttempt || 0) > 15000;
-              
-              if (shouldRetry) {
-                determiningWinnerRef.current.set(currentRace, true);
-                (determiningWinnerRef.current.get(currentRace) as any).lastAttempt = Date.now();
-                console.log(`[Race ${currentRace}] 🎲 Retrying winner determination during race visual (now: ${now}, betting ended: ${bettingEndTime})`);
+              determiningWinnerRef.current.set(currentRace, true);
+              console.log(`[Race ${currentRace}] 🎲 Retrying winner determination during race visual (now: ${now}, betting ended: ${bettingEndTime})`);
               
               fetch('/api/race/determine-winner', {
                 method: 'POST',
@@ -284,21 +278,24 @@ export default function RacePage() {
               })
               .then(async (res) => {
                 const data = await res.json();
+                console.log(`[Race ${currentRace}] Server response during race visual:`, data);
                 if (data.success) {
                   console.log(`[Race ${currentRace}] ✅ Winner determined: ${data.message}`);
                   setTimeout(() => fetchRaceData(), 2000);
                 } else {
                   console.warn(`[Race ${currentRace}] ⚠️ ${data.message || data.error || 'Still waiting...'}`);
+                  // Permitir reintentar después de 15 segundos
                   setTimeout(() => {
                     determiningWinnerRef.current.delete(currentRace);
-                  }, 10000);
+                  }, 15000);
                 }
               })
               .catch(err => {
-                console.error(`[Race ${currentRace}] ❌ Error:`, err);
+                console.error(`[Race ${currentRace}] ❌ Error during race visual:`, err);
+                // Permitir reintentar después de 15 segundos
                 setTimeout(() => {
                   determiningWinnerRef.current.delete(currentRace);
-                }, 10000);
+                }, 15000);
               });
             }
           } else {
