@@ -3,16 +3,12 @@ pragma solidity ^0.8.20;
 
 /**
  * @title FlapRace
- * @dev Smart contract for race betting on BNB
- * - Users can choose from 4 bet amounts
- * - Winners share the pool proportionally based on their bet percentage
- * - Losers' bets are added to the next race pool
- * 
- * Security improvements:
- * - ReentrancyGuard to protect claimWinnings()
- * - Enhanced validations in finalizeRace()
- * - Protections in withdraw()
- * - Improvements in getCurrentRaceId()
+ * @dev Simplified smart contract for race betting on BNB
+ * - Users can bet during 120 seconds from first bet
+ * - After betting closes, 10 second countdown
+ * - Winner is automatically determined using blockhash + deterministic data
+ * - Winners share pool proportionally based on bet percentage
+ * - Losers' bets automatically go to next race pool
  */
 contract FlapRace {
     // Simple ReentrancyGuard
@@ -37,27 +33,24 @@ contract FlapRace {
     // Race structure
     struct Race {
         uint256 raceId;
-        uint256 startTime;
-        uint256 bettingEndTime;
-        uint256 raceEndTime;
+        uint256 startTime; // When first bet was placed (starts the 120s betting period)
+        uint256 bettingEndTime; // startTime + 120 seconds
+        uint256 winnerDeterminedTime; // bettingEndTime + 10 seconds (countdown)
+        uint256 claimingStartTime; // winnerDeterminedTime + 30 seconds (after visual race ends)
         uint8 winner; // 0 = not determined, 1-4 = winning car
         bool finalized;
         uint256 totalPool;
         uint256 nextRacePool; // Losers' funds that go to the next race pool
-        uint256 raceSeed; // Deterministic seed generated when betting closes
-        bool seedGenerated; // Whether the seed has been generated
     }
 
     // Configuration
     uint256[] public validBetAmounts; // Valid bet amounts: [0.01, 0.05, 0.1, 0.5] BNB
     uint256 public constant BETTING_DURATION = 120 seconds; // 2 minutes
-    uint256 public constant COUNTDOWN_DURATION = 5 seconds; // 5 seconds
-    uint256 public constant RACE_DURATION = 30 seconds; // 30 seconds
-    uint256 public constant TOTAL_ROUND_DURATION = BETTING_DURATION + COUNTDOWN_DURATION + RACE_DURATION; // ~2.5 minutes
+    uint256 public constant COUNTDOWN_DURATION = 10 seconds; // 10 seconds countdown after betting closes
+    uint256 public constant RACE_VISUAL_DURATION = 30 seconds; // 30 seconds for frontend to show the race
     
     address public owner;
     uint256 public currentRaceId;
-    uint256 public nextRaceStartTime;
     
     // Mappings
     mapping(uint256 => Race) public races;
@@ -69,8 +62,8 @@ contract FlapRace {
     // Events
     event BetPlaced(address indexed user, uint256 indexed raceId, uint8 carId, uint256 amount);
     event RaceStarted(uint256 indexed raceId, uint256 startTime);
-    event RaceSeedGenerated(uint256 indexed raceId, uint256 seed);
-    event RaceEnded(uint256 indexed raceId, uint8 winner);
+    event WinnerDetermined(uint256 indexed raceId, uint8 winner);
+    event RaceFinalized(uint256 indexed raceId, uint8 winner);
     event WinningsClaimed(address indexed user, uint256 indexed raceId, uint256 amount);
     event NextRacePoolUpdated(uint256 indexed raceId, uint256 amount);
     event FundsDeposited(address indexed depositor, uint256 amount, uint256 raceId);
@@ -84,7 +77,6 @@ contract FlapRace {
     constructor() {
         owner = msg.sender;
         currentRaceId = 0;
-        nextRaceStartTime = block.timestamp;
         // Initialize valid bet amounts: 0.01, 0.05, 0.1, 0.5 BNB
         validBetAmounts.push(0.01 ether);
         validBetAmounts.push(0.05 ether);
@@ -107,6 +99,7 @@ contract FlapRace {
     /**
      * @dev Place a bet
      * @param carId Car ID (1-4)
+     * First bet starts the race timer (120 seconds betting period)
      */
     function placeBet(uint8 carId) external payable {
         require(carId >= 1 && carId <= 4, "Invalid car ID");
@@ -115,30 +108,17 @@ contract FlapRace {
         uint256 raceId = getCurrentRaceId();
         Race storage race = races[raceId];
         
-        // Initialize race if it doesn't exist
+        // Initialize race if it doesn't exist (first bet starts the race)
         if (race.startTime == 0) {
             race.raceId = raceId;
-            // Use current timestamp if nextRaceStartTime is in the past
-            // This ensures the race can start immediately if the contract was deployed a while ago
-            uint256 actualStartTime = nextRaceStartTime >= block.timestamp ? nextRaceStartTime : block.timestamp;
-            race.startTime = actualStartTime;
-            race.bettingEndTime = actualStartTime + BETTING_DURATION;
-            race.raceEndTime = race.bettingEndTime + COUNTDOWN_DURATION + RACE_DURATION;
-            // IMPORTANT: When initializing a new race, if there's a nextRacePool from previous race,
-            // add it to totalPool so it's included in the prize pool
-            race.totalPool = race.nextRacePool; // Include pool from previous race
-            race.nextRacePool = 0; // Reset nextRacePool since it's now in totalPool
+            race.startTime = block.timestamp; // Start timer from first bet
+            race.bettingEndTime = block.timestamp + BETTING_DURATION;
+            race.winnerDeterminedTime = race.bettingEndTime + COUNTDOWN_DURATION;
+            race.claimingStartTime = race.winnerDeterminedTime + RACE_VISUAL_DURATION;
+            // Include pool from previous race if exists
+            race.totalPool = race.nextRacePool;
+            race.nextRacePool = 0; // Reset since it's now in totalPool
             emit RaceStarted(raceId, race.startTime);
-            
-            // CRITICAL: Generate seed for PREVIOUS race if it wasn't generated yet
-            // This ensures the seed is available before the visual race starts
-            // IMPORTANT: Only generate if betting period has ended for previous race
-            if (raceId > 0) {
-                Race storage previousRace = races[raceId - 1];
-                if (previousRace.startTime > 0 && !previousRace.seedGenerated && block.timestamp >= previousRace.bettingEndTime) {
-                    _generateRaceSeedInternal(raceId - 1);
-                }
-            }
         }
         
         // Verify we are in betting period
@@ -169,87 +149,81 @@ contract FlapRace {
     }
 
     /**
-     * @dev Internal function to generate race seed deterministically
-     * CRITICAL FIX: Generates seed ONCE and stores it on-chain
-     * 
-     * SOLUTION TO SYNCHRONIZATION PROBLEM:
-     * - The first person to call this after betting ends generates the seed
-     * - The seed is based on IMMUTABLE race data + block hash at time of generation
-     * - The seed is STORED on-chain (race.raceSeed)
-     * - All subsequent calls return without regenerating (idempotent)
-     * - Everyone reads the SAME stored seed value
-     * 
-     * This ensures perfect synchronization across all clients.
+     * @dev Determine winner automatically using blockhash + deterministic data
+     * Can be called by anyone after winnerDeterminedTime
+     * Uses blockhash of the block when betting ended + race data for randomness
+     * This ensures randomness while being verifiable
      */
-    function _generateRaceSeedInternal(uint256 raceId) internal {
+    function determineWinner(uint256 raceId) external {
         Race storage race = races[raceId];
+        require(race.startTime > 0, "Race does not exist");
+        require(race.winner == 0, "Winner already determined");
+        require(block.timestamp >= race.winnerDeterminedTime, "Countdown not finished yet");
         
-        // CRITICAL: Prevent regeneration if seed already exists
-        // This is the KEY to synchronization - once generated, it never changes
-        if (race.seedGenerated) {
-            return; // Already generated, do not regenerate
+        // Get blockhash of the block when betting ended (or closest available)
+        // Use block.number - 1 to get a finalized block (blockhash is only available for last 256 blocks)
+        uint256 bettingEndBlock = _getBlockNumberAtTime(race.bettingEndTime);
+        bytes32 blockHash = blockhash(bettingEndBlock);
+        
+        // If blockhash is not available (too old), use current blockhash + race data
+        // This is a fallback but still provides randomness
+        if (uint256(blockHash) == 0) {
+            blockHash = keccak256(abi.encodePacked(
+                blockhash(block.number - 1),
+                raceId,
+                race.bettingEndTime,
+                race.totalPool
+            ));
         }
         
-        // Calculate total bets for this race
-        uint256 totalBets = raceBets[raceId].length;
-        
-        // CRITICAL FIX FOR SYNCHRONIZATION:
-        // Use ONLY deterministic data that NEVER changes
-        // NO blockhash - it's different for different clients calling at different times
-        // This makes the seed predictable but CONSISTENT for all clients
-        race.raceSeed = uint256(keccak256(abi.encodePacked(
+        // Combine blockhash with deterministic race data for additional entropy
+        bytes32 randomSeed = keccak256(abi.encodePacked(
+            blockHash,
             raceId,
             race.bettingEndTime,
             race.startTime,
-            totalBets,
             race.totalPool,
-            address(this) // Add contract address for uniqueness across deployments
-        )));
+            raceBets[raceId].length,
+            address(this)
+        ));
         
-        // CRITICAL: Mark as generated and emit event
-        // This prevents any future regeneration
-        race.seedGenerated = true;
-        emit RaceSeedGenerated(raceId, race.raceSeed);
+        // Determine winner (1-4) using modulo
+        uint8 winner = uint8((uint256(randomSeed) % 4) + 1);
+        race.winner = winner;
+        
+        emit WinnerDetermined(raceId, winner);
+        
+        // Automatically finalize the race
+        _finalizeRace(raceId);
     }
 
     /**
-     * @dev Finalize race and determine winner (owner or backend only)
-     * @param raceId Race ID
-     * @param winner Winning car ID (1-4)
+     * @dev Internal function to finalize race and distribute funds
      */
-    function finalizeRace(uint256 raceId, uint8 winner) external onlyOwner {
-        require(winner >= 1 && winner <= 4, "Invalid winner");
+    function _finalizeRace(uint256 raceId) internal {
         Race storage race = races[raceId];
-        require(race.startTime > 0, "Race does not exist");
+        require(race.winner > 0, "Winner not determined");
         require(!race.finalized, "Race already finalized");
-        require(block.timestamp >= race.raceEndTime, "Race not finished yet");
         
-        // Auto-generate seed if not generated yet
-        if (!race.seedGenerated) {
-            _generateRaceSeedInternal(raceId);
-        }
-        
-        race.winner = winner;
         race.finalized = true;
         
-        uint256 winnerPool = carBetsAmount[raceId][winner];
+        uint256 winnerPool = carBetsAmount[raceId][race.winner];
         uint256 loserPool = race.totalPool - winnerPool;
         
         // If no one bet on the winner, keep the entire pool for the next race
         if (winnerPool == 0) {
-            // No winners, entire pool moves to next race
             uint256 nextRaceId = raceId + 1;
             Race storage nextRace = races[nextRaceId];
             if (nextRace.startTime == 0) {
-                // Initialize next race
                 nextRace.raceId = nextRaceId;
-                nextRace.startTime = race.raceEndTime;
-                nextRace.bettingEndTime = race.raceEndTime + BETTING_DURATION;
-                nextRace.raceEndTime = nextRace.bettingEndTime + COUNTDOWN_DURATION + RACE_DURATION;
+                nextRace.startTime = race.claimingStartTime; // Next race starts when claiming begins
+                nextRace.bettingEndTime = race.claimingStartTime + BETTING_DURATION;
+                nextRace.winnerDeterminedTime = nextRace.bettingEndTime + COUNTDOWN_DURATION;
+                nextRace.claimingStartTime = nextRace.winnerDeterminedTime + RACE_VISUAL_DURATION;
                 nextRace.totalPool = 0;
                 nextRace.nextRacePool = 0;
             }
-            nextRace.nextRacePool += race.totalPool; // Entire pool moves forward
+            nextRace.nextRacePool += race.totalPool;
             race.nextRacePool = race.totalPool;
             emit NextRacePoolUpdated(nextRaceId, race.totalPool);
         } else {
@@ -258,11 +232,10 @@ contract FlapRace {
                 uint256 nextRaceId = raceId + 1;
                 Race storage nextRace = races[nextRaceId];
                 if (nextRace.startTime == 0) {
-                    // Initialize next race
                     nextRace.raceId = nextRaceId;
-                    nextRace.startTime = race.raceEndTime;
-                    nextRace.bettingEndTime = race.raceEndTime + BETTING_DURATION;
-                    nextRace.raceEndTime = nextRace.bettingEndTime + COUNTDOWN_DURATION + RACE_DURATION;
+                    nextRace.startTime = race.winnerDeterminedTime;
+                    nextRace.bettingEndTime = race.winnerDeterminedTime + BETTING_DURATION;
+                    nextRace.winnerDeterminedTime = nextRace.bettingEndTime + COUNTDOWN_DURATION;
                     nextRace.totalPool = 0;
                     nextRace.nextRacePool = 0;
                 }
@@ -272,26 +245,41 @@ contract FlapRace {
             }
         }
         
-        // Update next race start time
-        nextRaceStartTime = race.raceEndTime;
         currentRaceId = raceId;
-        
-        emit RaceEnded(raceId, winner);
+        emit RaceFinalized(raceId, race.winner);
+    }
+
+    /**
+     * @dev Helper function to estimate block number at a given timestamp
+     * BSC has ~3 seconds per block
+     */
+    function _getBlockNumberAtTime(uint256 timestamp) internal view returns (uint256) {
+        if (timestamp >= block.timestamp) {
+            return block.number;
+        }
+        // Estimate: BSC has ~3 seconds per block
+        uint256 blocksAgo = (block.timestamp - timestamp) / 3;
+        if (blocksAgo > 256) {
+            return block.number - 256; // blockhash only available for last 256 blocks
+        }
+        return block.number - blocksAgo;
     }
 
     /**
      * @dev Claim winnings
      * @param raceId Race ID
+     * Can only be called 30 seconds after winner is determined (after visual race ends)
      */
     function claimWinnings(uint256 raceId) external nonReentrant {
         Race storage race = races[raceId];
         require(race.finalized, "Race not finalized");
         require(race.winner > 0, "No winner determined");
+        require(block.timestamp >= race.claimingStartTime, "Race visual not finished yet. Wait 30 seconds after winner is determined.");
         
         uint256 betIdx = userBetIndex[msg.sender][raceId];
         require(betIdx > 0, "No bet found");
         
-        Bet storage bet = raceBets[raceId][betIdx - 1]; // -1 because index is 1-based
+        Bet storage bet = raceBets[raceId][betIdx - 1];
         require(bet.user == msg.sender, "Not your bet");
         require(bet.carId == race.winner, "You didn't win");
         require(!bet.claimed, "Already claimed");
@@ -315,7 +303,7 @@ contract FlapRace {
         // Mark as claimed BEFORE transferring (Checks-Effects-Interactions pattern)
         bet.claimed = true;
         
-        // Transfer winnings using sendValue pattern (safer than call)
+        // Transfer winnings
         (bool success, ) = payable(msg.sender).call{value: userShare}("");
         require(success, "Transfer failed");
         
@@ -324,7 +312,6 @@ contract FlapRace {
 
     /**
      * @dev Get current race ID
-     * Handles edge cases where races may not be sequential
      */
     function getCurrentRaceId() public view returns (uint256) {
         // If no races exist, return 0
@@ -332,21 +319,14 @@ contract FlapRace {
             return 0;
         }
         
-        // If current race has ended, look for the next one
+        // If current race has been finalized, return next ID
         Race memory currentRace = races[currentRaceId];
-        if (currentRace.raceEndTime > 0 && block.timestamp >= currentRace.raceEndTime) {
-            // Check if next race exists and is active
-            uint256 nextId = currentRaceId + 1;
-            Race memory nextRace = races[nextId];
-            if (nextRace.startTime > 0 && block.timestamp < nextRace.raceEndTime) {
-                return nextId;
-            }
-            // If it doesn't exist, return next ID (will be created in placeBet)
-            return nextId;
+        if (currentRace.finalized) {
+            return currentRaceId + 1;
         }
         
-        // If current race is active, return it
-        if (currentRace.startTime > 0 && block.timestamp < currentRace.raceEndTime) {
+        // If current race exists and is not finalized, return it
+        if (currentRace.startTime > 0) {
             return currentRaceId;
         }
         
@@ -360,49 +340,24 @@ contract FlapRace {
     function getRaceInfo(uint256 raceId) external view returns (
         uint256 startTime,
         uint256 bettingEndTime,
-        uint256 raceEndTime,
+        uint256 winnerDeterminedTime,
+        uint256 claimingStartTime,
         uint8 winner,
         bool finalized,
         uint256 totalPool,
-        uint256 nextRacePool,
-        uint256 raceSeed,
-        bool seedGenerated
+        uint256 nextRacePool
     ) {
         Race memory race = races[raceId];
         return (
             race.startTime,
             race.bettingEndTime,
-            race.raceEndTime,
+            race.winnerDeterminedTime,
+            race.claimingStartTime,
             race.winner,
             race.finalized,
             race.totalPool,
-            race.nextRacePool,
-            race.raceSeed,
-            race.seedGenerated
+            race.nextRacePool
         );
-    }
-    
-    /**
-     * @dev Get race seed (read-only)
-     * Returns the current seed without generating it
-     */
-    function getRaceSeed(uint256 raceId) external view returns (uint256 seed, bool generated) {
-        Race memory race = races[raceId];
-        return (race.raceSeed, race.seedGenerated);
-    }
-    
-    /**
-     * @dev Generate race seed (public function, requires transaction)
-     * Anyone can call this once betting has closed to generate the seed
-     * Subsequent calls will not regenerate the seed (idempotent)
-     */
-    function generateRaceSeed(uint256 raceId) external {
-        Race storage race = races[raceId];
-        require(race.startTime > 0, "Race does not exist");
-        require(block.timestamp >= race.bettingEndTime, "Betting period not ended yet");
-        
-        // This will only generate if not already generated (idempotent)
-        _generateRaceSeedInternal(raceId);
     }
 
     /**
@@ -459,9 +414,6 @@ contract FlapRace {
 
     /**
      * @dev Get race statistics
-     * @return totalBets Total number of bets
-     * @return totalBettors Total number of bettors
-     * @return totalPool Total pool amount
      */
     function getRaceStats(uint256 raceId) external view returns (
         uint256 totalBets,
@@ -472,22 +424,6 @@ contract FlapRace {
         totalBets = raceBets[raceId].length;
         totalBettors = totalBets; // Each bet is from a different person (1 bet per wallet)
         totalPool = race.totalPool + race.nextRacePool;
-    }
-
-    /**
-     * @dev Get total number of bets for a race
-     */
-    function getTotalBetsCount(uint256 raceId) external view returns (uint256) {
-        return raceBets[raceId].length;
-    }
-
-    /**
-     * @dev Change bet amount (owner only, for future adjustments)
-     */
-    function setBetAmount(uint256 /* newAmount */) external view onlyOwner {
-        // This function would require changing BET_AMOUNT to a variable
-        // For now it's commented, can be implemented if needed
-        revert("Not implemented - use constant BET_AMOUNT");
     }
 
     /**
@@ -510,7 +446,7 @@ contract FlapRace {
             }
         }
         
-        // Only allow withdrawing non-committed funds (with small buffer for gas)
+        // Only allow withdrawing non-committed funds
         uint256 availableFunds = balance > committedFunds ? balance - committedFunds : 0;
         require(availableFunds > 0, "All funds are committed to active races");
         
@@ -522,7 +458,6 @@ contract FlapRace {
     
     /**
      * @dev Withdraw all funds (owner only, for extreme emergencies)
-     * Use with caution - may affect active races
      */
     function emergencyWithdraw() external onlyOwner {
         uint256 balance = address(this).balance;
@@ -535,12 +470,9 @@ contract FlapRace {
     }
 
     /**
-     * @dev Deposit funds to contract (for trading fees or manual deposits)
+     * @dev Deposit funds to contract
      * Deposited BNB is added to current race pool if in betting period,
      * otherwise added to next race pool
-     * 
-     * Note: Anyone can deposit (including automatic trading fees)
-     * This is intentional to allow fees to be added automatically
      */
     function deposit() public payable {
         require(msg.value > 0, "Must send BNB");
@@ -557,14 +489,14 @@ contract FlapRace {
             Race storage nextRace = races[nextRaceId];
             if (nextRace.startTime == 0) {
                 // Initialize if it doesn't exist
-                uint256 currentRaceEnd = currentRace.raceEndTime;
-                if (currentRaceEnd == 0) {
-                    currentRaceEnd = block.timestamp;
-                }
+                uint256 nextStartTime = currentRace.claimingStartTime > 0 
+                    ? currentRace.claimingStartTime 
+                    : block.timestamp;
                 nextRace.raceId = nextRaceId;
-                nextRace.startTime = currentRaceEnd;
-                nextRace.bettingEndTime = currentRaceEnd + BETTING_DURATION;
-                nextRace.raceEndTime = nextRace.bettingEndTime + COUNTDOWN_DURATION + RACE_DURATION;
+                nextRace.startTime = nextStartTime;
+                nextRace.bettingEndTime = nextStartTime + BETTING_DURATION;
+                nextRace.winnerDeterminedTime = nextRace.bettingEndTime + COUNTDOWN_DURATION;
+                nextRace.claimingStartTime = nextRace.winnerDeterminedTime + RACE_VISUAL_DURATION;
                 nextRace.totalPool = 0;
                 nextRace.nextRacePool = 0;
             }
@@ -578,7 +510,6 @@ contract FlapRace {
      * @dev Receive BNB (for trading fees that will be added automatically)
      */
     receive() external payable {
-        // Call deposit() to handle the deposit
         deposit();
     }
 }

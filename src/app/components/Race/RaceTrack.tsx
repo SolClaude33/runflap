@@ -31,12 +31,11 @@ const RACE_DURATION_SECONDS = 30; // Match raceSimulation.ts
 interface RaceTrackProps {
   raceState: 'betting' | 'pre_countdown' | 'countdown' | 'racing' | 'finished';
   countdown: number | null;
-  preCountdown?: number | null; // Pre-countdown timer (5 seconds before race starts)
+  preCountdown?: number | null; // Countdown timer (10 seconds after betting closes)
   onRaceEnd: (winner: number) => void;
-  raceId: number; // ID de la carrera para seed determinístico
-  raceStartTime: number; // Timestamp del contrato cuando empieza la carrera (Unix timestamp)
-  raceSeed: { seed: number; generated: boolean } | null; // Seed del contrato (CRITICAL: todos los clientes deben usar el mismo)
-  calculatedWinner?: number | null; // Pre-calculated winner from seed (to give visual advantage)
+  raceId: number; // ID de la carrera
+  raceStartTime: number; // Timestamp del contrato cuando empieza la carrera visual (winnerDeterminedTime)
+  contractWinner?: number | null; // Winner determined by contract (after countdown)
 }
 
 // Professional F1/NASCAR hybrid oval track - clean racing circuit
@@ -64,8 +63,8 @@ const createInitialRacers = (seed: number = 0): Racer[] => {
   ].map((r) => {
     // Base speed calculated to complete 5 laps in ~30 seconds
     // Circuit length ~1966 units: 5 laps = 9830 units / 30s = ~328 units/sec average
-    // Using higher base speed (500) to ensure race completes in time with variations
-    const baseSpeed = 500; // Increased to ensure race completes all 5 laps
+    // Using higher base speed (550) to ensure race completes in time with variations
+    const baseSpeed = 550; // Increased to ensure race completes all 5 laps within 30 seconds
     return {
       ...r,
       distance: 0,
@@ -83,7 +82,7 @@ const createInitialRacers = (seed: number = 0): Racer[] => {
   });
 };
 
-export default function RaceTrack({ raceState, countdown, preCountdown, onRaceEnd, raceId, raceStartTime, raceSeed, calculatedWinner }: RaceTrackProps) {
+export default function RaceTrack({ raceState, countdown, preCountdown, onRaceEnd, raceId, raceStartTime, contractWinner }: RaceTrackProps) {
   const [racers, setRacers] = useState<Racer[]>(createInitialRacers());
   const [winner, setWinner] = useState<Racer | null>(null);
   const [totalLength, setTotalLength] = useState<number>(0);
@@ -168,28 +167,16 @@ export default function RaceTrack({ raceState, countdown, preCountdown, onRaceEn
   };
 
   useEffect(() => {
-    // CRITICAL: DO NOT initialize racers until seed is available
-    // This ensures all clients use the exact same seed for perfect synchronization
+    // CRITICAL: Initialize racers when race state changes to countdown or racing
+    // Use deterministic seed based on raceId and raceStartTime (winnerDeterminedTime)
+    // The contract determines the winner, but we use a seed for visual simulation
     if ((raceState === 'countdown' || raceState === 'racing') && totalLength > 0 && !racersReady && raceId >= 0) {
-      // CRITICAL: Wait for contract seed - DO NOT use fallback seed
-      // If seed is not available, the race should not start
-      // This ensures perfect synchronization across all clients
-      
-      if (!raceSeed || !raceSeed.generated || raceSeed.seed === 0) {
-        // Seed not available yet - do not initialize racers
-        // The race will wait until the seed is generated
-        console.warn(`[RaceTrack] ⚠️ CRITICAL: Contract seed not ready for race ${raceId} (seed: ${raceSeed?.seed}, generated: ${raceSeed?.generated}). Race will not start until seed is available!`);
-        return; // Do not initialize racers without seed
-      }
-      
-      // CRITICAL: Use the seed from the contract
-      // This is THE ONLY source of truth for the race
-      // ALL clients MUST use the exact same seed for perfect synchronization
-      const contractSeed = raceSeed.seed;
-      console.log(`[RaceTrack] ✅ Using contract seed: ${contractSeed} for race ${raceId}`);
+      // Use deterministic seed based on raceId and raceStartTime
+      // This ensures all clients use the same seed for consistent visual simulation
+      const deterministicSeed = (raceId * 7919 + Math.floor(raceStartTime || 0) * 3571) >>> 0;
       
       // CRITICAL: Ensure seed is a 32-bit unsigned integer for consistent PRNG
-      const normalizedSeed = (contractSeed >>> 0);
+      const normalizedSeed = (deterministicSeed >>> 0);
       seedRef.current = normalizedSeed;
       rngRef.current = createPRNG(normalizedSeed);
       tickCounterRef.current = 0;
@@ -222,8 +209,9 @@ export default function RaceTrack({ raceState, countdown, preCountdown, onRaceEn
       lastProcessedTickRef.current = maxPreConsume; // Initialize last processed tick
       
       setRacersReady(true);
+      console.log(`[RaceTrack] ✅ Initialized race ${raceId} with seed ${normalizedSeed}, contract winner: ${contractWinner || 'not determined yet'}`);
     }
-  }, [raceState, totalLength, racersReady, raceId, raceSeed, raceStartTime]);
+  }, [raceState, totalLength, racersReady, raceId, raceStartTime, contractWinner]);
 
   useEffect(() => {
     if (raceState === 'betting' || raceState === 'finished') {
@@ -375,7 +363,7 @@ export default function RaceTrack({ raceState, countdown, preCountdown, onRaceEn
               newTargetSpeed *= 0.85 + rngRef.current() * 0.30;
             }
             
-            newTargetSpeed = Math.max(400, Math.min(650, newTargetSpeed)); // Increased min from 300 to 400 to ensure race completion
+            newTargetSpeed = Math.max(450, Math.min(700, newTargetSpeed)); // Increased min to 450 and max to 700 to ensure race completion
             newLastSpeedChange = tickContractTime;
           }
           
@@ -395,14 +383,14 @@ export default function RaceTrack({ raceState, countdown, preCountdown, onRaceEn
           if (timeRemaining > 0 && distanceRemaining > 0 && !isFinalSeconds) {
             const requiredSpeed = distanceRemaining / timeRemaining;
             adjustedSpeed = newSpeed * 0.70 + requiredSpeed * 0.30;
-            adjustedSpeed = Math.max(400, Math.min(700, adjustedSpeed)); // Increased min to 400 for better completion
+            adjustedSpeed = Math.max(450, Math.min(750, adjustedSpeed)); // Increased min to 450 and max to 750 for better completion
           } else if (isFinalSeconds) {
             // In final seconds, ensure minimum speed to complete race
-            adjustedSpeed = Math.max(400, newSpeed);
+            adjustedSpeed = Math.max(450, newSpeed);
           }
           
           // Final safety check: ensure speed is never below minimum
-          adjustedSpeed = Math.max(400, adjustedSpeed);
+          adjustedSpeed = Math.max(450, adjustedSpeed);
           
           let newDistance = racer.distance + adjustedSpeed * tickDeltaTime;
           let newLap = racer.lap;
@@ -453,11 +441,11 @@ export default function RaceTrack({ raceState, countdown, preCountdown, onRaceEn
         // Calculate base visual speed
         let visualSpeed = racer.currentSpeed;
         
-        // Apply visual boost to calculated winner in last 2 laps (visual only, doesn't affect logic)
+        // Apply visual boost to contract winner in last 2 laps (visual only, doesn't affect logic)
         // CRITICAL: Use deterministic calculation based on contract race time to ensure consistency across browsers
         // This ensures the same boost is applied at the same time in all browsers, regardless of frame rate
         const isLastTwoLaps = racer.lap >= 4;
-        if (calculatedWinner && isLastTwoLaps && racer.id === calculatedWinner) {
+        if (contractWinner && isLastTwoLaps && racer.id === contractWinner) {
           // Calculate deterministic boost based on contract race time (rounded to nearest 0.1s for consistency)
           // Use the current tick to ensure deterministic calculation
           const currentTick = Math.floor(contractRaceTime * 10);

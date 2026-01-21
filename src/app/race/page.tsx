@@ -23,8 +23,7 @@ import {
   claimWinnings,
   getValidBetAmounts,
   getRaceStats,
-  getContractRaceSeed,
-  generateRaceSeed,
+  determineWinner,
   getContractOwner,
   getContractBalance,
   withdraw,
@@ -34,15 +33,14 @@ import {
   type CarStats,
   type RaceStats,
 } from '../services/flaprace';
-import { calculateRaceWinner } from '@/lib/raceSimulation';
 import { ethers } from 'ethers';
 
 type RaceState = 'betting' | 'pre_countdown' | 'countdown' | 'racing' | 'finished';
 
-// Nuevos tiempos: 2 min apuestas, 5 seg countdown, 30 seg carrera
+// Nuevos tiempos: 2 min apuestas, 10 seg countdown, 30 seg carrera visual
 const BETTING_TIME = 120; // 2 minutos
-const PRE_COUNTDOWN_DURATION = 5; // 5 segundos
-const RACE_DURATION = 30; // 30 segundos
+const COUNTDOWN_DURATION = 10; // 10 segundos countdown después de cerrar apuestas
+const RACE_VISUAL_DURATION = 30; // 30 segundos para mostrar la carrera visual
 
 const CAR_NAMES: Record<number, string> = {
   1: 'Car 1',
@@ -62,8 +60,7 @@ export default function RacePage() {
   const [bets, setBets] = useState<Bet[]>([]);
   const [carStats, setCarStats] = useState<CarStats | null>(null);
   const [raceStats, setRaceStats] = useState<RaceStats | null>(null);
-  const [raceSeedData, setRaceSeedData] = useState<{ seed: number; generated: boolean } | null>(null);
-  const [calculatedWinner, setCalculatedWinner] = useState<number | null>(null); // Winner calculated from seed (available before race starts)
+  const [contractWinner, setContractWinner] = useState<number | null>(null); // Winner from contract (determined after countdown)
   const [showProfileModal, setShowProfileModal] = useState(false);
   const [showHelpModal, setShowHelpModal] = useState(false);
   const [lastWinner, setLastWinner] = useState<number | null>(null);
@@ -82,12 +79,12 @@ export default function RacePage() {
   // Guardar timestamps del contrato para countdown local suave
   const contractTimestampsRef = useRef<{
     bettingEndTime: number | null;
-    raceStartTime: number | null;
-    raceEndTime: number | null;
+    winnerDeterminedTime: number | null;
+    claimingStartTime: number | null;
   }>({
     bettingEndTime: null,
-    raceStartTime: null,
-    raceEndTime: null,
+    winnerDeterminedTime: null,
+    claimingStartTime: null,
   });
   const [validBetAmounts, setValidBetAmounts] = useState<string[]>(['0.01', '0.05', '0.1', '0.5']);
   const [isOwner, setIsOwner] = useState(false);
@@ -170,51 +167,66 @@ export default function RacePage() {
           const now = Math.floor(Date.now() / 1000);
           const startTime = Number(info.startTime);
           const bettingEndTime = Number(info.bettingEndTime);
-          const raceStartTime = bettingEndTime + PRE_COUNTDOWN_DURATION; // Cuando empieza la carrera visual
-          const raceEndTime = Number(info.raceEndTime);
+          const winnerDeterminedTime = Number(info.winnerDeterminedTime);
+          const claimingStartTime = Number(info.claimingStartTime);
+          const raceVisualStartTime = winnerDeterminedTime; // La carrera visual empieza cuando se determina el ganador
+          const raceVisualEndTime = claimingStartTime; // La carrera visual termina cuando se pueden reclamar ganancias
 
           // Guardar timestamps del contrato una vez para countdown local suave
           if (startTime > 0 && bettingEndTime > 0) {
             contractTimestampsRef.current = {
               bettingEndTime: Number(bettingEndTime),
-              raceStartTime: Number(bettingEndTime) + PRE_COUNTDOWN_DURATION,
-              raceEndTime: Number(raceEndTime),
+              winnerDeterminedTime: Number(winnerDeterminedTime),
+              claimingStartTime: Number(claimingStartTime),
             };
           }
 
           // Si la carrera no ha sido inicializada (startTime = 0), significa que nadie ha apostado todavía
-          // En este caso, la carrera empezará cuando alguien apueste, pero mostramos estado de "betting" listo para apostar
           if (startTime === 0 || bettingEndTime === 0) {
-            // Carrera no inicializada - está lista para que alguien apueste
-            // La carrera se inicializará automáticamente cuando alguien apueste
-            console.log(`[Race ${currentRace}] 🔄 Race not initialized (startTime: ${startTime}, bettingEndTime: ${bettingEndTime}). Setting state to BETTING.`);
+            console.log(`[Race ${currentRace}] 🔄 Race not initialized. Setting state to BETTING.`);
             setRaceState('betting');
-            // No hay timer porque la carrera empezará cuando alguien apueste
             setBettingTimer(BETTING_TIME);
             contractTimestampsRef.current = {
               bettingEndTime: null,
-              raceStartTime: null,
-              raceEndTime: null,
+              winnerDeterminedTime: null,
+              claimingStartTime: null,
             };
           } else if (now < bettingEndTime) {
+            // Betting period activo
             console.log(`[Race ${currentRace}] ⏰ Betting period active (now: ${now}, ends: ${bettingEndTime}). State: BETTING`);
             setRaceState('betting');
-          } else if (now < raceStartTime) {
-            console.log(`[Race ${currentRace}] 🏁 Pre-countdown (now: ${now}, starts: ${raceStartTime}). State: PRE_COUNTDOWN`);
+          } else if (now < winnerDeterminedTime) {
+            // Countdown period (10 segundos después de cerrar apuestas)
+            console.log(`[Race ${currentRace}] 🏁 Countdown (now: ${now}, winner determined at: ${winnerDeterminedTime}). State: PRE_COUNTDOWN`);
             setRaceState('pre_countdown');
-          } else if (now < raceEndTime) {
-            console.log(`[Race ${currentRace}] 🏎️ Race in progress (now: ${now}, ends: ${raceEndTime}). State: RACING`);
+            
+            // Intentar determinar ganador si aún no se ha determinado
+            if (info.winner === 0 && signer) {
+              try {
+                await determineWinner(signer, currentRace);
+                console.log(`[Race ${currentRace}] ✅ Winner determination triggered`);
+              } catch (error) {
+                // Silenciar errores - puede que ya se haya determinado o no sea el momento
+              }
+            }
+          } else if (now < raceVisualEndTime) {
+            // Race visual period (30 segundos para mostrar la carrera)
+            console.log(`[Race ${currentRace}] 🏎️ Race visual in progress (now: ${now}, ends: ${raceVisualEndTime}). State: RACING`);
             setRaceState('racing');
-          } else if (info.finalized) {
-            console.log(`[Race ${currentRace}] 🏆 Race finished and finalized. Winner: ${info.winner}. State: FINISHED`);
-            setRaceState('finished');
-            if (info.winner > 0) {
+            
+            // Si el ganador ya está determinado, actualizarlo
+            if (info.winner > 0 && info.winner !== contractWinner) {
+              setContractWinner(info.winner);
               setLastWinner(info.winner);
             }
           } else {
-            console.log(`[Race ${currentRace}] ⏱️ Race ended but not finalized yet (now: ${now}, raceEnd: ${raceEndTime}). State: FINISHED`);
-            // La carrera terminó pero no está finalizada
+            // Race finished
+            console.log(`[Race ${currentRace}] 🏆 Race finished. Winner: ${info.winner}. State: FINISHED`);
             setRaceState('finished');
+            if (info.winner > 0) {
+              setContractWinner(info.winner);
+              setLastWinner(info.winner);
+            }
           }
         }
       } catch (error: any) {
@@ -252,105 +264,17 @@ export default function RacePage() {
         // Silenciar errores
       }
       
-      // Obtener seed del contrato (CRÍTICO para sincronización)
-      // IMPORTANT: Solo LEER el seed, NO generarlo aquí (el owner lo genera al finalizar)
-      // Esto evita que MetaMask pida transacciones a los usuarios
-      if (info && Number(info.bettingEndTime) <= Math.floor(Date.now() / 1000)) {
-        try {
-          // Solo leer el seed (view call, sin gas, sin transacción)
-          const contractSeed = await callWithTimeout(
-            getContractRaceSeed(provider, currentRace),
-            5000,
-            'Failed to get contract race seed'
-          );
-          
-          // Guardar el seed data
-          if (contractSeed) {
-            setRaceSeedData({
-              seed: contractSeed.seed,
-              generated: contractSeed.generated,
-            });
-            
-            if (contractSeed.generated && contractSeed.seed !== 0) {
-              console.log(`[Race ${currentRace}] ✅ Using contract seed: ${contractSeed.seed}`);
-              
-              // CRITICAL: Calculate winner immediately when seed is available
-              // This happens after betting ends, during the 5-second countdown
-              // All clients will know who will win before the race starts visually
-              try {
-                const CIRCUIT_LENGTH = 1966.32;
-                const winner = calculateRaceWinner(contractSeed.seed, CIRCUIT_LENGTH);
-                setCalculatedWinner(winner);
-                console.log(`[Race ${currentRace}] 🏆 Winner calculated from seed: Car ${winner} (available before race starts)`);
-              } catch (calcError: any) {
-                console.error(`[Race ${currentRace}] Error calculating winner from seed:`, calcError);
-                setCalculatedWinner(null);
-              }
-            } else {
-              // Seed not generated yet - clear calculated winner
-              setCalculatedWinner(null);
-              console.log(`[Race ${currentRace}] ⏳ Seed not generated yet, triggering backend generation...`);
-              
-              // CRITICAL: Trigger seed generation via backend API (no MetaMask popup)
-              // This replaces the need for a cron job
-              // Pass raceId to ensure correct race seed is generated
-              try {
-                const response = await fetch('/api/race/generate-seed', {
-                  method: 'POST',
-                  headers: {
-                    'Content-Type': 'application/json',
-                  },
-                  body: JSON.stringify({ raceId: currentRace }),
-                });
-                const result = await response.json();
-                if (result.success) {
-                  console.log(`[Race ${currentRace}] ✅ Seed generation triggered:`, result.message);
-                  // Immediately refresh seed data after generation
-                  setTimeout(async () => {
-                    try {
-                      const newSeed = await getContractRaceSeed(provider, currentRace);
-                      if (newSeed && newSeed.generated && newSeed.seed !== 0) {
-                        setRaceSeedData({
-                          seed: newSeed.seed,
-                          generated: newSeed.generated,
-                        });
-                        console.log(`[Race ${currentRace}] ✅ Seed now available: ${newSeed.seed}`);
-                        
-                        // Calculate winner when seed becomes available
-                        try {
-                          const CIRCUIT_LENGTH = 1966.32;
-                          const winner = calculateRaceWinner(newSeed.seed, CIRCUIT_LENGTH);
-                          setCalculatedWinner(winner);
-                          console.log(`[Race ${currentRace}] 🏆 Winner calculated from seed: Car ${winner}`);
-                        } catch (calcError: any) {
-                          console.error(`[Race ${currentRace}] Error calculating winner:`, calcError);
-                        }
-                      }
-                    } catch (error) {
-                      // Silently retry later
-                    }
-                  }, 2000);
-                } else {
-                  console.log(`[Race ${currentRace}] ℹ️ Seed generation:`, result.message || result.error);
-                }
-              } catch (error) {
-                // Silenciar errores - no es crítico si falla
-                console.log(`[Race ${currentRace}] ⚠️ Could not trigger seed generation (will retry):`, error);
-              }
-            }
-          } else {
-            setRaceSeedData(null);
-            setCalculatedWinner(null); // Clear winner if seed not available
-          }
-        } catch (error) {
-          // Silenciar errores de seed no disponible (es normal antes de que empiece la carrera)
-          setRaceSeedData(null);
-          setCalculatedWinner(null);
+      // El ganador se determina automáticamente en el contrato después del countdown
+      // Solo necesitamos leerlo cuando esté disponible
+      if (info && info.winner > 0) {
+        if (info.winner !== contractWinner) {
+          setContractWinner(info.winner);
+          setLastWinner(info.winner);
+          console.log(`[Race ${currentRace}] 🏆 Winner from contract: Car ${info.winner}`);
         }
       } else {
-        // Si las apuestas aún no se cierran, no hay seed disponible
-        setRaceSeedData(null);
-        setCalculatedWinner(null);
+        // Ganador aún no determinado
+        setContractWinner(null);
       }
 
       // Obtener apuesta del usuario (no crítico)
@@ -405,26 +329,19 @@ export default function RacePage() {
       }
 
       const now = Math.floor(Date.now() / 1000);
-      const raceEndTime = Number(raceInfo.raceEndTime);
+      const claimingStartTime = Number(raceInfo.claimingStartTime);
       const startTime = Number(raceInfo.startTime);
       
-      // CRITICAL: Verificar que la carrera existe y terminó
+      // CRITICAL: Verificar que la carrera existe
       // Si startTime es 0, la carrera no ha sido inicializada (nadie ha apostado)
-      if (startTime === 0 || raceEndTime === 0) {
+      if (startTime === 0) {
         // Carrera no inicializada - no intentar finalizar
-        // Esto previene errores al intentar finalizar carreras que no existen
         return;
       }
       
-      // CRITICAL: Verificar que la carrera realmente terminó
-      // Si raceEndTime es 0 o menor que startTime, la carrera no es válida
-      if (raceEndTime <= startTime) {
-        // Carrera con tiempos inválidos - no finalizar
-        return;
-      }
-      
-      // Si la carrera terminó hace más de 5 segundos pero no está finalizada según el estado local
-      if (now > raceEndTime + 5 && !raceInfo.finalized) {
+      // El contrato ahora finaliza automáticamente cuando se determina el ganador
+      // Solo verificamos si está finalizada, no necesitamos finalizarla manualmente
+      if (!raceInfo.finalized && raceInfo.winner > 0 && now >= claimingStartTime) {
         // PRIMERO: Verificar directamente en el contrato si ya está finalizada
         // Esto evita llamadas innecesarias al backend
         try {
@@ -454,64 +371,11 @@ export default function RacePage() {
           return;
         }
 
-        const timeSinceEnd = now - raceEndTime;
-        console.log(`[Auto-Finalize] Race ${raceNumber} ended ${timeSinceEnd}s ago but not finalized. Attempting auto-finalize...`);
-        
-        finalizingRaceRef.current.add(raceNumber);
-        
-        try {
-          // Intentar finalizar con el ganador detectado, o usar ganador 1 como fallback
-          const detectedWinner = winnerDetectedRef.current.get(raceNumber) || 1;
-          console.log(`[Auto-Finalize] Calling /api/race/finalize with raceId=${raceNumber}, winner=${detectedWinner}`);
-          
-          const response = await fetch('/api/race/finalize', {
-            method: 'POST',
-            headers: {
-              'Content-Type': 'application/json',
-            },
-            body: JSON.stringify({
-              raceId: raceNumber,
-              winner: detectedWinner,
-            }),
-          });
-
-          const result = await response.json();
-          if (result.success) {
-            console.log(`[Auto-Finalize] ✅ Race ${raceNumber} auto-finalized successfully. Winner: Car ${detectedWinner}. TX: ${result.txHash}`);
-            finalizingRaceRef.current.delete(raceNumber);
-            // Marcar como verificado para evitar verificaciones repetidas mientras se actualiza el estado
-            verifiedFinalizedRef.current.add(raceNumber);
-            // Recargar datos después de finalizar
-            fetchRaceData();
-            // También programar una segunda actualización después de un delay para asegurar sincronización
-            setTimeout(() => fetchRaceData(), 1500);
-          } else {
-            // Si el error es "already finalized", forzar recarga para actualizar estado
-            if (result.error && (result.error.includes('already finalized') || result.error.includes('already final'))) {
-              console.log(`[Auto-Finalize] Race ${raceNumber} already finalized on-chain. Forcing state update...`);
-              // Marcar como verificado para evitar verificaciones repetidas
-              verifiedFinalizedRef.current.add(raceNumber);
-              finalizingRaceRef.current.delete(raceNumber);
-              // Recargar inmediatamente para actualizar el estado
-              fetchRaceData();
-              // También programar una segunda actualización
-              setTimeout(() => fetchRaceData(), 1000);
-            } else {
-              console.error(`[Auto-Finalize] ❌ Race ${raceNumber} auto-finalize failed:`, result.error);
-              // No marcar como verificado si hubo un error real
-              finalizingRaceRef.current.delete(raceNumber);
-            }
-          }
-        } catch (error: any) {
-          console.error(`[Auto-Finalize] ❌ Race ${raceNumber} auto-finalize error:`, error.message || error);
-          // Si es un error de red/HTTP y es 400, podría ser "already finalized"
-          if (error.message && error.message.includes('400')) {
-            console.log(`[Auto-Finalize] Received 400 error, assuming race ${raceNumber} already finalized. Forcing state update...`);
-            verifiedFinalizedRef.current.add(raceNumber);
-            fetchRaceData();
-          }
-          finalizingRaceRef.current.delete(raceNumber);
-        }
+        // El contrato finaliza automáticamente, solo necesitamos refrescar los datos
+        console.log(`[Auto-Finalize] Race ${raceNumber} should be finalized. Refreshing data...`);
+        verifiedFinalizedRef.current.add(raceNumber);
+        fetchRaceData();
+        setTimeout(() => fetchRaceData(), 1500);
       }
     };
 
@@ -541,7 +405,7 @@ export default function RacePage() {
     // Función para actualizar timers basado en tiempo actual
     const updateTimers = () => {
       const timestamps = contractTimestampsRef.current;
-      if (!timestamps.bettingEndTime && !timestamps.raceStartTime && !timestamps.raceEndTime) {
+      if (!timestamps.bettingEndTime && !timestamps.winnerDeterminedTime) {
         // No hay timestamps guardados aún, esperar a que fetchRaceData los establezca
         return;
       }
@@ -552,18 +416,18 @@ export default function RacePage() {
         // Betting phase - countdown regresivo suave
         const remaining = Math.max(0, timestamps.bettingEndTime - currentTime);
         setBettingTimer(remaining);
-      } else if (timestamps.raceStartTime && currentTime < timestamps.raceStartTime) {
-        // Pre-countdown phase - countdown regresivo suave
-        const remaining = Math.max(0, timestamps.raceStartTime - currentTime);
+      } else if (timestamps.winnerDeterminedTime && currentTime < timestamps.winnerDeterminedTime) {
+        // Countdown phase (10 seconds after betting closes)
+        const remaining = Math.max(0, timestamps.winnerDeterminedTime - currentTime);
         setPreCountdown(remaining);
-      } else if (timestamps.raceEndTime && currentTime < timestamps.raceEndTime) {
-        // Racing phase
-        const timeSinceRaceStart = timestamps.raceStartTime 
-          ? currentTime - timestamps.raceStartTime 
+      } else if (timestamps.claimingStartTime && currentTime < timestamps.claimingStartTime) {
+        // Race visual phase (30 seconds to show the race)
+        const timeSinceWinnerDetermined = timestamps.winnerDeterminedTime 
+          ? currentTime - timestamps.winnerDeterminedTime 
           : 0;
-        if (timeSinceRaceStart < 3) {
-          setCountdown(Math.max(0, 3 - timeSinceRaceStart));
-    } else {
+        if (timeSinceWinnerDetermined < 3) {
+          setCountdown(Math.max(0, 3 - timeSinceWinnerDetermined));
+        } else {
           setCountdown(null);
         }
       }
@@ -675,133 +539,21 @@ export default function RacePage() {
   }, [signer, isOwner, provider]);
 
   const handleRaceEnd = useCallback(async (winnerId: number) => {
-    // CRITICAL: Use the pre-calculated winner if available (calculated when seed was generated)
-    // This winner was determined BEFORE the race started visually, ensuring perfect consistency
-    // If calculatedWinner is not available, fall back to calculating it now
-    const CIRCUIT_LENGTH = 1966.32;
-    let finalWinner = calculatedWinner;
+    // El ganador ya está determinado en el contrato después del countdown
+    // Usar el ganador del contrato si está disponible, sino usar el visual
+    const finalWinner = contractWinner || winnerId;
     
-    if (finalWinner === null) {
-      // Calculate winner if not already calculated (shouldn't happen, but fallback)
-      if (raceSeedData && raceSeedData.generated && raceSeedData.seed !== 0) {
-        try {
-          finalWinner = calculateRaceWinner(raceSeedData.seed, CIRCUIT_LENGTH);
-          console.log(`[Race ${raceNumber}] ✅ Winner calculated from seed: Car ${finalWinner} (visual: Car ${winnerId})`);
-        } catch (calcError: any) {
-          console.error(`[Race ${raceNumber}] Error calculating winner:`, calcError);
-          finalWinner = winnerId; // Fallback to visual winner
-        }
-      } else {
-        console.warn(`[Race ${raceNumber}] ⚠️ Seed not available, using visual winner: Car ${winnerId}`);
-        finalWinner = winnerId;
-      }
-    } else {
-      // Use pre-calculated winner (determined before race started)
-      console.log(`[Race ${raceNumber}] ✅ Using pre-calculated winner: Car ${finalWinner} (visual: Car ${winnerId})`);
-      
-      // Verify visual winner matches (should always match if simulation is correct)
-      if (finalWinner !== winnerId) {
-        console.warn(`[Race ${raceNumber}] ⚠️ Visual winner (Car ${winnerId}) doesn't match pre-calculated winner (Car ${finalWinner}). Using pre-calculated winner.`);
-      }
-    }
-    
-    // CRITICAL: Store the final winner (pre-calculated from seed)
-    // This winner was determined BEFORE the race started, ensuring perfect consistency
-    if (!winnerDetectedRef.current.has(raceNumber)) {
-      winnerDetectedRef.current.set(raceNumber, finalWinner);
-      console.log(`[Race ${raceNumber}] Winner determined (pre-calculated from seed): Car ${finalWinner}`);
-    } else {
-      const storedWinner = winnerDetectedRef.current.get(raceNumber);
-      if (storedWinner !== finalWinner) {
-        console.warn(`[Race ${raceNumber}] Winner mismatch! Stored: Car ${storedWinner}, New: Car ${finalWinner}. Using stored winner.`);
-        finalWinner = storedWinner!;
-      }
-    }
+    console.log(`[Race ${raceNumber}] Race visual ended. Contract winner: ${contractWinner}, Visual winner: ${winnerId}, Using: ${finalWinner}`);
     
     setRaceState('finished');
     setLastWinner(finalWinner);
     
-    // Finalizar la carrera en el contrato automáticamente
-    // Esperar a que el contrato realmente termine antes de intentar finalizar
-    if (!testMode && raceNumber > 0 && raceInfo) {
-      // Prevent duplicate finalization attempts
-      if (finalizingRaceRef.current.has(raceNumber)) {
-        console.log(`Race ${raceNumber} already being finalized, skipping...`);
-        return;
-      }
-
-      finalizingRaceRef.current.add(raceNumber);
-      
-      // Use the pre-calculated winner (determined from seed before race started)
-      console.log(`[Race ${raceNumber}] Finalizing with pre-calculated winner: Car ${finalWinner}`);
-
-      const raceEndTime = Number(raceInfo.raceEndTime);
-      const now = Math.floor(Date.now() / 1000);
-      const timeUntilEnd = raceEndTime - now;
-      
-      // Si la carrera aún no ha terminado en el contrato, esperar
-      const finalizeRace = async () => {
-        try {
-          const response = await fetch('/api/race/finalize', {
-            method: 'POST',
-            headers: {
-              'Content-Type': 'application/json',
-            },
-            body: JSON.stringify({
-              raceId: raceNumber,
-              winner: finalWinner, // Use stored winner for consistency
-            }),
-          });
-
-          const result = await response.json();
-          if (result.success) {
-            console.log(`Race ${raceNumber} finalized. Winner: Car ${finalWinner}. TX: ${result.txHash}`);
-            // Remove from set after successful finalization
-            finalizingRaceRef.current.delete(raceNumber);
-            // Clear winner detection for this race
-            winnerDetectedRef.current.delete(raceNumber);
-          } else {
-            // Remove from set if error indicates race is already finalized
-            if (result.error?.includes('already finalized')) {
-              finalizingRaceRef.current.delete(raceNumber);
-              console.log(`Race ${raceNumber} was already finalized`);
-            } else if (result.error?.includes('not finished yet')) {
-              // Retry after a delay
-              setTimeout(() => {
-                finalizingRaceRef.current.delete(raceNumber);
-                finalizeRace();
-              }, 2000);
-            } else {
-              console.error('Error finalizing race:', result.error);
-              finalizingRaceRef.current.delete(raceNumber);
-            }
-          }
-          } catch (error) {
-          console.error('Failed to finalize race:', error);
-          // Remove from set on error and retry after a delay
-          finalizingRaceRef.current.delete(raceNumber);
-          setTimeout(() => {
-            if (!finalizingRaceRef.current.has(raceNumber)) {
-              finalizeRace();
-            }
-          }, 2000);
-        }
-      };
-      
-      // Esperar hasta que el contrato termine (con un pequeño margen)
-      if (timeUntilEnd > 0) {
-        setTimeout(finalizeRace, (timeUntilEnd + 1) * 1000);
-      } else {
-        // Ya terminó, intentar inmediatamente
-        finalizeRace();
-      }
-    }
-    
-    // Recargar datos después de que termine la carrera
+    // El contrato ya finaliza automáticamente cuando se determina el ganador
+    // Solo necesitamos recargar los datos
     setTimeout(() => {
       fetchRaceData();
     }, 2000);
-  }, [fetchRaceData, raceNumber, testMode, raceInfo]);
+  }, [fetchRaceData, raceNumber, contractWinner]);
 
   const handlePlaceBet = useCallback(async (carId: number, betAmount: string) => {
     if (testMode) {
@@ -1110,12 +862,20 @@ export default function RacePage() {
                     <div className="font-bold text-lg text-[#d4a517]">{ethers.formatEther(userBet.amount)} BNB</div>
                     <div className="text-sm">{getCarName(userBet.carId)}</div>
                     {raceInfo?.finalized && userBet.carId === raceInfo.winner && !userBet.claimed && (
-                      <button
-                        onClick={handleClaimWinnings}
-                        className="mt-3 w-full bg-[#d4a517] hover:bg-[#b8940f] text-black px-4 py-3 rounded-lg font-bold text-base shadow-lg animate-pulse"
-                      >
-                        🎉 Claim Winnings
-                      </button>
+                      <>
+                        {raceInfo && Number(raceInfo.claimingStartTime) <= Math.floor(Date.now() / 1000) ? (
+                          <button
+                            onClick={handleClaimWinnings}
+                            className="mt-3 w-full bg-[#d4a517] hover:bg-[#b8940f] text-black px-4 py-3 rounded-lg font-bold text-base shadow-lg animate-pulse"
+                          >
+                            🎉 Claim Winnings
+                          </button>
+                        ) : (
+                          <div className="mt-3 w-full bg-[#f59e0b]/20 border border-[#f59e0b] text-[#f59e0b] px-4 py-3 rounded-lg font-bold text-base text-center">
+                            ⏳ Wait for race visual to finish
+                          </div>
+                        )}
+                      </>
                     )}
                     {raceInfo?.finalized && userBet.carId === raceInfo.winner && userBet.claimed && (
                       <div className="mt-2 text-[#7cb894] text-sm">✅ Winnings claimed</div>
@@ -1287,9 +1047,8 @@ export default function RacePage() {
                 preCountdown={preCountdown}
                 onRaceEnd={handleRaceEnd}
                 raceId={raceNumber}
-                raceStartTime={raceInfo ? Number(raceInfo.bettingEndTime) + PRE_COUNTDOWN_DURATION : 0}
-                raceSeed={raceSeedData}
-                calculatedWinner={calculatedWinner}
+                raceStartTime={raceInfo ? Number(raceInfo.winnerDeterminedTime) : 0}
+                contractWinner={contractWinner}
               />
             )}
           </div>

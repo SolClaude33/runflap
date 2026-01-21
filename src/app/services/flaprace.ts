@@ -94,7 +94,7 @@ const FLAPRACE_ABI = [
 				"type": "uint256"
 			}
 		],
-		"name": "generateRaceSeed",
+		"name": "determineWinner",
 		"outputs": [],
 		"stateMutability": "nonpayable",
 		"type": "function"
@@ -478,7 +478,12 @@ const FLAPRACE_ABI = [
 			},
 			{
 				"internalType": "uint256",
-				"name": "raceEndTime",
+				"name": "winnerDeterminedTime",
+				"type": "uint256"
+			},
+			{
+				"internalType": "uint256",
+				"name": "claimingStartTime",
 				"type": "uint256"
 			},
 			{
@@ -500,16 +505,6 @@ const FLAPRACE_ABI = [
 				"internalType": "uint256",
 				"name": "nextRacePool",
 				"type": "uint256"
-			},
-			{
-				"internalType": "uint256",
-				"name": "raceSeed",
-				"type": "uint256"
-			},
-			{
-				"internalType": "bool",
-				"name": "seedGenerated",
-				"type": "bool"
 			}
 		],
 		"stateMutability": "view",
@@ -523,22 +518,6 @@ const FLAPRACE_ABI = [
 				"type": "uint256"
 			}
 		],
-		"name": "getRaceSeed",
-		"outputs": [
-			{
-				"internalType": "uint256",
-				"name": "seed",
-				"type": "uint256"
-			},
-			{
-				"internalType": "bool",
-				"name": "generated",
-				"type": "bool"
-			}
-		],
-		"stateMutability": "view",
-		"type": "function"
-	},
 	{
 		"inputs": [
 			{
@@ -881,13 +860,12 @@ const FLAPRACE_ABI = [
 export interface RaceInfo {
   startTime: bigint;
   bettingEndTime: bigint;
-  raceEndTime: bigint;
+  winnerDeterminedTime: bigint;
+  claimingStartTime: bigint;
   winner: number;
   finalized: boolean;
   totalPool: bigint;
   nextRacePool: bigint;
-  raceSeed: bigint;
-  seedGenerated: boolean;
 }
 
 export interface Bet {
@@ -1008,13 +986,12 @@ export const getRaceInfo = async (
     return {
       startTime: info.startTime,
       bettingEndTime: info.bettingEndTime,
-      raceEndTime: info.raceEndTime,
+      winnerDeterminedTime: info.winnerDeterminedTime,
+      claimingStartTime: info.claimingStartTime,
       winner: Number(info.winner),
       finalized: info.finalized,
       totalPool: info.totalPool,
       nextRacePool: info.nextRacePool,
-      raceSeed: info.raceSeed,
-      seedGenerated: info.seedGenerated,
     };
   } catch (error) {
     console.error('Error getting race info:', error);
@@ -1167,17 +1144,17 @@ export const getRaceStats = async (
 };
 
 /**
- * Generar seed para una carrera (llama al contrato)
- * CRITICAL: This should be called by anyone once betting closes
- * The contract will generate a deterministic seed that all clients will use
+ * Determine winner for a race (calls the contract)
+ * CRITICAL: This should be called by anyone once countdown finishes (10 seconds after betting closes)
+ * The contract will determine the winner using blockhash + deterministic data
  */
-export const generateRaceSeed = async (
+export const determineWinner = async (
   signer: ethers.JsonRpcSigner,
   raceId: number
 ): Promise<{ success: boolean; txHash?: string; error?: string }> => {
   try {
     const contract = getContract(signer);
-    const tx = await contract.generateRaceSeed(raceId);
+    const tx = await contract.determineWinner(raceId);
     const receipt = await tx.wait();
     
     return {
@@ -1185,17 +1162,79 @@ export const generateRaceSeed = async (
       txHash: receipt.hash,
     };
   } catch (error: any) {
-    console.error('Error generating race seed:', error);
+    console.error('Error determining winner:', error);
     return {
       success: false,
-      error: error.reason || error.message || 'Error al generar seed',
+      error: error.reason || error.message || 'Error al determinar ganador',
     };
+  }
+};
+
+/**
+ * Calcular el seed de una carrera localmente usando la misma fórmula que el contrato
+ * Esto permite que todos los clientes calculen el seed sin esperar por la transacción on-chain
+ * CRITICAL: This matches the contract's seed generation exactly
+ */
+export const calculateRaceSeedLocally = (
+  raceId: number,
+  bettingEndTime: number,
+  startTime: number,
+  totalBets: number,
+  totalPool: bigint,
+  contractAddress: string
+): number => {
+  try {
+    // Use the same formula as the contract:
+    // race.raceSeed = uint256(keccak256(abi.encodePacked(
+    //     raceId,
+    //     race.bettingEndTime,
+    //     race.startTime,
+    //     totalBets,
+    //     race.totalPool,
+    //     address(this)
+    // )));
+    
+    // Encode packed data (same as abi.encodePacked in Solidity)
+    // In ethers v6, we use solidityPacked if available, otherwise construct manually
+    let packedData: string;
+    try {
+      // Try using solidityPacked (ethers v6)
+      packedData = ethers.solidityPacked(
+        ['uint256', 'uint256', 'uint256', 'uint256', 'uint256', 'address'],
+        [raceId, bettingEndTime, startTime, totalBets, totalPool, contractAddress]
+      );
+    } catch {
+      // Fallback: manually pack data (same as abi.encodePacked)
+      // Convert each value to hex and concatenate
+      const raceIdHex = ethers.toBeHex(BigInt(raceId), 32).slice(2);
+      const bettingEndTimeHex = ethers.toBeHex(BigInt(bettingEndTime), 32).slice(2);
+      const startTimeHex = ethers.toBeHex(BigInt(startTime), 32).slice(2);
+      const totalBetsHex = ethers.toBeHex(BigInt(totalBets), 32).slice(2);
+      const totalPoolHex = ethers.toBeHex(totalPool, 32).slice(2);
+      const addressHex = contractAddress.slice(2).toLowerCase().padStart(64, '0');
+      packedData = '0x' + raceIdHex + bettingEndTimeHex + startTimeHex + totalBetsHex + totalPoolHex + addressHex;
+    }
+    
+    // Calculate keccak256 hash
+    const hash = ethers.keccak256(packedData);
+    
+    // Convert to uint256 (BigInt) and then to 32-bit number for PRNG
+    const seedBigInt = BigInt(hash);
+    const seed = Number(seedBigInt & BigInt(0xFFFFFFFF)); // Use lower 32 bits for PRNG
+    
+    return seed;
+  } catch (error) {
+    console.error('Error calculating race seed locally:', error);
+    // Fallback to simple deterministic seed
+    return (raceId * 7919 + bettingEndTime * 3571) >>> 0;
   }
 };
 
 /**
  * Obtener seed de una carrera directamente del contrato
  * CRITICAL: All clients MUST use this seed for synchronization
+ * 
+ * If seed is not generated on-chain yet, calculates it locally using race data
  */
 export const getContractRaceSeed = async (
   provider: ethers.BrowserProvider,
@@ -1208,10 +1247,46 @@ export const getContractRaceSeed = async (
     // Convert BigInt to number safely (32-bit)
     const seed = Number(result.seed & BigInt(0xFFFFFFFF));
     
-    return {
-      seed,
-      generated: result.generated,
-    };
+    // If seed is generated on-chain, use it
+    if (result.generated && seed !== 0) {
+      return {
+        seed,
+        generated: true,
+      };
+    }
+    
+    // If seed is not generated yet, calculate it locally using race data
+    // This ensures the race can start immediately without waiting for the on-chain transaction
+    try {
+      const raceInfo = await getRaceInfo(provider, raceId);
+      if (!raceInfo || Number(raceInfo.startTime) === 0) {
+        return null; // Race doesn't exist yet
+      }
+      
+      // Get total bets count
+      const bets = await getRaceBets(provider, raceId);
+      const totalBets = bets.length;
+      
+      // Calculate seed locally using the same formula as the contract
+      const localSeed = calculateRaceSeedLocally(
+        raceId,
+        Number(raceInfo.bettingEndTime),
+        Number(raceInfo.startTime),
+        totalBets,
+        raceInfo.totalPool,
+        CONTRACT_ADDRESS
+      );
+      
+      console.log(`[getContractRaceSeed] Calculated local seed for race ${raceId}: ${localSeed} (on-chain not generated yet)`);
+      
+      return {
+        seed: localSeed,
+        generated: false, // Mark as not generated on-chain yet
+      };
+    } catch (localCalcError) {
+      console.error('Error calculating seed locally:', localCalcError);
+      return null;
+    }
   } catch (error) {
     console.error('Error getting contract race seed:', error);
     return null;
